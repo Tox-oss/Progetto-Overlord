@@ -1,0 +1,11 @@
+# Python / Flask
+__pycache__/
+*.pyc
+.venv/
+
+# Dati generati dell'utente
+.n8n/
+
+# File temporanei di sistema
+.DS_Store
+*.log

@@ -1,0 +1,10 @@
+{
+  "destinazione": null,
+  "argomenti": [
+    {
+      "sorgente": "ambiente_mock.xlsx",
+      "etichetta": "CO2",
+      "riga_etichetta": 8
+    }
+  ]
+}

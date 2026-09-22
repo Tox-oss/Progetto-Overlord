@@ -1,0 +1,32 @@
+name: progetto-exel
+
+# Il selettore parte con "docker compose up -d".
+# n8n resta SPENTO: parte solo con "docker compose --profile auto up -d".
+services:
+  selettore:
+    build:
+      context: ..
+      dockerfile: Dockerfile.selettore
+    container_name: exel-selettore
+    ports:
+      - "8010:8000"
+    volumes:
+      - ../files:/files
+    restart: unless-stopped
+
+  n8n:
+    profiles: ["auto"]
+    image: n8nio/n8n:latest
+    container_name: exel-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - TZ=Europe/Rome
+      - EXECUTIONS_PROCESS=main
+    volumes:
+      - ../files:/files
+      - ./.n8n:/home/node/.n8n
+    restart: unless-stopped

@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Progetto ExEL - Selettore</title>
+  <style>
+    :root {
+      --sfondo: #f3f6fb;
+      --carta: #ffffff;
+      --acc: #1a5fb4;
+      --bordo: #d3dae6;
+      --testo: #1c1f24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--sfondo);
+      color: var(--testo);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+    }
+    .contenitore {
+      max-width: 960px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    header {
+      background: var(--carta);
+      border: 1px solid var(--bordo);
+      border-radius: 10px;
+      padding: 18px 22px;
+    }
+    header h1 { margin: 0 0 6px; font-size: 20px; color: var(--acc); }
+    header p { margin: 0; color: #5c6672; font-size: 14px; }
+    .pannello {
+      background: var(--carta);
+      border: 1px solid var(--bordo);
+      border-radius: 10px;
+      padding: 18px 22px;
+    }
+    .pannello h2 { margin: 0 0 12px; font-size: 15px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+    select, input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 9px 10px;
+      border: 1px solid var(--bordo);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 14px;
+    }
+    .campo-riga { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button {
+      background: var(--acc);
+      color: #fff;
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondario { background: #4b5563; }
+    button.pericolo { background: #b3261e; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .riga-bottoni { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--bordo); vertical-align: top; }
+    th { color: var(--acc); }
+    .esito {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      display: none;
+      white-space: pre-wrap;
+    }
+    .esito.ok { display: block; background: #e5f6ea; color: #1b6e3a; }
+    .esito.err { display: block; background: #fde8e8; color: #b3261e; }
+    .vuoto { color: #8a94a3; font-style: italic; font-size: 13px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .badge.ok { background: #e5f6ea; color: #1b6e3a; }
+    .badge.no { background: #fde8e8; color: #b3261e; }
+  </style>
+</head>
+<body>
+  <div class="contenitore">
+    <header>
+      <h1>Progetto ExEL &mdash; Multi-sorgente</h1>
+      <p>Monitora dozzine di Excel, seleziona gli argomenti (colonna in grassetto) e compila un&rsquo;unica scheda.</p>
+    </header>
+
+    <section class="pannello">
+      <h2>1 &middot; Sorgenti &amp; argomenti</h2>
+      <label for="selSorgente">File sorgente (Excel da leggere)</label>
+      <select id="selSorgente"></select>
+      <label for="selArgomento">Argomento (colonna in grassetto)</label>
+      <select id="selArgomento" disabled></select>
+      <div id="anteprima"></div>
+      <div class="riga-bottoni">
+        <button id="btnAggiungi" disabled>Aggiungi alla configurazione</button>
+      </div>
+    </section>
+
+    <section class="pannello">
+      <h2>2 &middot; Configurazione (tutti gli argomenti che compilano la scheda)</h2>
+      <div id="tabConfig"><p class="vuoto">Nessun argomento configurato.</p></div>
+      <label for="selDest">Scheda finale da compilare</label>
+      <select id="selDest"></select>
+      <div class="riga-bottoni">
+        <button id="btnCompila" disabled>Compila modulo</button>
+        <button id="btnExport" class="secondario" disabled>Esporta con nome&hellip;</button>
+      </div>
+      <label for="inpNome">Nome del file di esportazione</label>
+      <input id="inpNome" type="text" value="esportazione.xlsx">
+    </section>
+
+    <section class="pannello">
+      <h2>3 &middot; Modella scheda (crea voci in grassetto vuote in posizioni diverse)</h2>
+      <label for="selScheda">Scheda da modellare</label>
+      <select id="selScheda"></select>
+      <label for="inpTesto">Testo della voce (es. FOTOMETRIA)</label>
+      <input id="inpTesto" type="text" placeholder="FOTOMETRIA">
+      <div class="campo-riga">
+        <div>
+          <label for="inpRiga">Riga</label>
+          <input id="inpRiga" type="number" min="1" value="5">
+        </div>
+        <div>
+          <label for="inpCol">Colonna</label>
+          <input id="inpCol" type="text" value="B" placeholder="B oppure 2">
+        </div>
+      </div>
+      <div class="riga-bottoni">
+        <button id="btnModella" disabled>Crea voce</button>
+      </div>
+      <div id="listaVoci"></div>
+    </section>
+
+    <div id="esito" class="esito"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const selSorgente = $("selSorgente");
+    const selArgomento = $("selArgomento");
+    const selDest = $("selDest");
+    const selScheda = $("selScheda");
+
+    function esitoOk(msg) {
+      const e = $("esito");
+      e.className = "esito ok";
+      e.textContent = msg;
+    }
+    function colLettera(n) {
+      let s = "";
+      while (n) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+      return s;
+    }
+    function esitoErr(msg) {
+      const e = $("esito");
+      e.className = "esito err";
+      e.textContent = msg;
+    }
+    function fillSelect(sel, nomi, placeholder) {
+      sel.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = placeholder;
+      sel.appendChild(opt);
+      for (const n of nomi) {
+        const o = document.createElement("option");
+        o.value = n;
+        o.textContent = n;
+        sel.appendChild(o);
+      }
+    }
+    function mostraAnteprima(arg, btnAggiungi) {
+      const wrap = $("anteprima");
+      if (!arg) {
+        wrap.innerHTML = '<p class="vuoto">Nessun argomento selezionato.</p>';
+        btnAggiungi.disabled = true;
+        return;
+      }
+      let html = "<table><tr><th>#</th><th>Valore</th></tr>";
+      arg.valori.forEach((v, i) => { html += `<tr><td>${i + 1}</td><td>${v}</td></tr>`; });
+      html += "</table>";
+      if (!arg.valori.length) html += '<p class="vuoto">Nessun valore sotto l&rsquo;etichetta.</p>';
+      wrap.innerHTML = html;
+      btnAggiungi.disabled = false;
+    }
+    function statoConfig(cfg) {
+      const wrap = $("tabConfig");
+      if (!cfg.argomenti.length) {
+        wrap.innerHTML = '<p class="vuoto">Nessun argomento configurato.</p>';
+        $("btnCompila").disabled = true;
+        $("btnExport").disabled = true;
+        return;
+      }
+      let html = "<table><tr><th>Sorgente</th><th>Argomento</th><th>Riga</th><th></th></tr>";
+      cfg.argomenti.forEach((a, i) => {
+        html += `<tr><td>${a.sorgente}</td><td>${a.etichetta}</td><td>${a.riga_etichetta}</td>` +
+                `<td><button class="pericolo" onclick="rimuoviArgomento(${i})">Rimuovi</button></td></tr>`;
+      });
+      html += "</table>";
+      wrap.innerHTML = html;
+      $("btnCompila").disabled = false;
+      $("btnExport").disabled = false;
+    }
+    async function aggiornaConfig() {
+      const cfg = await fetch("/api/config").then(r => r.json());
+      statoConfig(cfg);
+      if (cfg.destinazione) { selDest.value = cfg.destinazione; }
+      if (cfg.destinazione) { selScheda.value = cfg.destinazione; }
+      return cfg;
+    }
+    async function carica() {
+      const [sorgenti, dest] = await Promise.all([
+        fetch("/api/sorgenti").then(r => r.json()),
+        fetch("/api/destinazioni").then(r => r.json()),
+      ]);
+      fillSelect(selSorgente, sorgenti, "— scegli il file sorgente —");
+      fillSelect(selDest, dest, "— scegli la scheda finale —");
+      fillSelect(selScheda, dest, "— scegli una scheda —");
+      await aggiornaConfig();
+    }
+    async function caricaArgomenti(nome, etichettaScelta) {
+      const res = await fetch("/api/argomenti?file=" + encodeURIComponent(nome));
+      if (!res.ok) return;
+      const args = await res.json();
+      fillSelect(selArgomento, args.map(a => a.etichetta + " (riga " + a.riga + ")"),
+        "— scegli l'argomento —");
+      selArgomento.disabled = false;
+      $("btnAggiungi").disabled = !selArgomento.value;
+      if (etichettaScelta) {
+        for (const opt of selArgomento.options) {
+          if (opt.textContent.startsWith(etichettaScelta + " ")) {
+            selArgomento.value = opt.value;
+            break;
+          }
+        }
+      }
+    }
+    function argomentoScelto() {
+      const nome = selSorgente.value;
+      const testo = selArgomento.value;
+      if (!nome || !testo) return null;
+      const riga = parseInt((testo.match(/riga (\d+)/) || [null, null])[1]);
+      const etichetta = testo.replace(/\s*\(riga \d+\)/, "");
+      return { sorgente: nome, etichetta, riga_etichetta: riga };
+    }
+    async function mostraAnteprimaCorrente() {
+      const a = argomentoScelto();
+      if (!a) return mostraAnteprima(null, $("btnAggiungi"));
+      const args = await fetch("/api/argomenti?file=" + encodeURIComponent(a.sorgente)).then(r => r.json());
+      const trovato = args.find(x => x.riga === a.riga_etichetta);
+      mostraAnteprima(trovato, $("btnAggiungi"));
+    }
+    async function caricaVoci() {
+      const nome = selScheda.value;
+      const wrap = $("listaVoci");
+      $("btnModella").disabled = !nome;
+      if (!nome) { wrap.innerHTML = ""; return; }
+      const voci = await fetch("/api/scheda?file=" + encodeURIComponent(nome)).then(r => r.json());
+      if (!voci.length) {
+        wrap.innerHTML = '<p class="vuoto">Nessuna voce in grassetto in questa scheda.</p>';
+        return;
+      }
+      let html = "<table><tr><th>Voce</th><th>Posizione</th></tr>";
+      voci.forEach(v => { html += `<tr><td>${v.etichetta}</td><td>${v.posizione}</td></tr>`; });
+      html += "</table>";
+      wrap.innerHTML = html;
+    }
+
+    selSorgente.addEventListener("change", () => {
+      selArgomento.disabled = !selSorgente.value;
+      selArgomento.innerHTML = "";
+      $("anteprima").innerHTML = '<p class="vuoto">Scegli un argomento.</p>';
+      $("btnAggiungi").disabled = true;
+      if (selSorgente.value) caricaArgomenti(selSorgente.value);
+    });
+    selArgomento.addEventListener("change", mostraAnteprimaCorrente);
+
+    $("btnAggiungi").addEventListener("click", async () => {
+      const a = argomentoScelto();
+      if (!a) return esitoErr("Seleziona file sorgente e argomento.");
+      const cfg = await fetch("/api/aggiungi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(a),
+      }).then(r => r.json());
+      statoConfig(cfg);
+      esitoOk("Argomento aggiunto: " + a.etichetta + " da " + a.sorgente);
+    });
+
+    window.rimuoviArgomento = async (indice) => {
+      const cfg = await fetch("/api/config").then(r => r.json());
+      const a = cfg.argomenti[indice];
+      const nuova = await fetch("/api/rimuovi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sorgente: a.sorgente, etichetta: a.etichetta }),
+      }).then(r => r.json());
+      statoConfig(nuova);
+      esitoOk("Rimosso: " + a.etichetta);
+    };
+
+    selDest.addEventListener("change", async () => {
+      if (selDest.value) {
+        await fetch("/api/destinazione", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ destinazione: selDest.value }),
+        });
+      }
+    });
+
+    $("btnCompila").addEventListener("click", async () => {
+      const res = await fetch("/api/compila", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
+      const righe = data.esiti.map(e => {
+        if (e.trovata) {
+          return `  OK  ${e.etichetta} → ${colLettera(e.colonna)}${e.riga} (${e.valori.length} valori)`;
+        }
+        return `  NON TROVATA  ${e.etichetta}`;
+      }).join("\n");
+      esitoOk("Compilazione:\n" + righe);
+      await caricaVoci();
+      await aggiornaConfig();
+    });
+
+    $("btnExport").addEventListener("click", async () => {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: $("inpNome").value }),
+      });
+      const data = await res.json();
+      if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
+      window.location.href = "/api/download/" + encodeURIComponent(data.file);
+      esitoOk("Esportati " + data.argomenti + " argomenti in " + data.file);
+    });
+
+    selScheda.addEventListener("change", caricaVoci);
+    $("btnModella").addEventListener("click", async () => {
+      const payload = {
+        destinazione: selScheda.value,
+        testo: $("inpTesto").value,
+        riga: $("inpRiga").value,
+        colonna: $("inpCol").value,
+      };
+      if (!payload.destinazione || !payload.testo) {
+        return esitoErr("Scegli scheda e testo della voce.");
+      }
+      const res = await fetch("/api/modella", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
+      esitoOk("Voce creata: " + payload.testo + " in " + payload.colonna.toUpperCase() + payload.riga);
+      await caricaVoci();
+    });
+
+    carica();
+  </script>
+</body>
+</html>
