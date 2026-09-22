@@ -7,7 +7,7 @@ Strumento che monitora dozzine di file Excel sorgente, estrae "argomenti" (etich
 App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Server Flask attivo in background su porta **8010**. n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali** e **attivare n8n**.
 
 ## 🗂 Struttura progetto
-Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto ExEL/`
+Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata da "Progetto ExEL")
 - `files/source/` : sorgenti Excel (mockup: `impianto_mock.xlsx` = VELOCITA', PRESSIONE, TEMPERATURA, LIVELLO; `ambiente_mock.xlsx` = UMIDITA', CO2, ILLUMINAZIONE). Struttura: colonna verticale, etichetta in grassetto, valori consecutivi sotto; **1 riga vuota = buco dati da saltare; 2 righe vuote consecutive = blocco terminato**.
 - `files/dest/scheda_mock.xlsx` : scheda finale come modulo LIBERO con etichette in grassetto SPARSE (VELOCITA' in B3, PRESSIONE in E7, TEMPERATURA in C12, LIVELLO in F15, UMIDITA' in B19, CO2 in E21); valori da scrivere SOTTO l'etichetta.
 - `files/config/selezione.json` : configurazione corrente — attualmente `destinazione: null`, 1 argomento: CO2 (sorgente `ambiente_mock.xlsx`, riga_etichetta 8).

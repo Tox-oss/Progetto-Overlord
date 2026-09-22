@@ -13,7 +13,7 @@ Strumento che monitora diverse cartelle di file Excel sorgente, estrae gli **arg
 ## Come eseguire (test)
 
 ```bash
-cd "~/Scrivania/Lavori/Progetto ExEL"
+cd "~/Scrivania/Lavori/Progetto Overlord"
 
 # 1. Avvia la web app (richiede Python 3.12 e il venv)
 app/.venv/bin/python app/app.py
