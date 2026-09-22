@@ -26,7 +26,7 @@ Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata
 - **Compilazione**: testo etichetta uguale tra sorgente e scheda → scrivi valori sotto, svuotando il blocco vecchio (fonte: `app/parser.py` — `scrivi_sotto`).
 - Al termine dei test: ripristinare mock/config/state con `tools/make_mockups.py` + reset JSON (config attualmente con destinazione null e un solo argomento CO2; state resettato). (fonte: `files/config/selezione.json`, `files/state/last_value.json`)
 - n8n compose: selettore parte con `docker compose up -d`; n8n solo con `docker compose --profile auto up -d`. (fonte: `n8n/docker-compose.yml`)
-- Git: push imminente su `https://github.com/Tox-oss/Progetto-Vita.git` (branch main); `.gitignore` escluderà `.venv` e file temporanei.
+- Git: push imminente su `https://github.com/Tox-oss/Progetto-Overlord.git` (branch main); `.gitignore` escluderà `.venv` e file temporanei.
 
 ## ⚠️ Criticità aperte
 - [MEDIA] Euristiche parser (grassetto-titolo, font size) NON ancora validate su file reali dell'utente — da testare insieme (fonte: contesto utente).
@@ -40,4 +40,4 @@ Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata
 1. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5).
 2. Attivare n8n (`docker compose --profile auto up -d`) e agganciare `/api/elabora` come bridge di automazione.
 3. (Futuro) Integrare notifiche email.
-4. Push del progetto su GitHub `Tox-oss/Progetto-Vita` (branch main) con `.gitignore` per `.venv` e temporanei.
+4. Push del progetto su GitHub `Tox-oss/Progetto-Overlord` (branch main) con `.gitignore` per `.venv` e temporanei.
