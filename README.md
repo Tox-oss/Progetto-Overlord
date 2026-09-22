@@ -1,4 +1,4 @@
-# Progetto ExEL
+# Overlord
 
 Strumento che monitora diverse cartelle di file Excel sorgente, estrae gli **argomenti** (etichette in grassetto con valori sotto) e compila un'**unica scheda** Excel di destinazione, scrivendo i valori nelle posizioni giuste in base a dove sta l'etichetta.
 

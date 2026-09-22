@@ -7,7 +7,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.selettore
-    container_name: exel-selettore
+    container_name: overlord-selettore
     ports:
       - "8010:8000"
     volumes:

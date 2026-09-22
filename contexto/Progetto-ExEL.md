@@ -1,4 +1,4 @@
-# Contesto - Progetto ExEL
+# Contesto - Overlord (ex "Progetto ExEL")
 
 ## 🎯 Obiettivo
 Strumento che monitora dozzine di file Excel sorgente, estrae "argomenti" (etichette in grassetto con valori sotto) e compila un unico file Excel di destinazione ("scheda") in posizioni specifiche. Ruolo principale: rilevare modifiche ai file, prelevare valori selezionati e immetterli nella scheda da compilare. Futuro: automazione con n8n self-hosted e notifiche email.
