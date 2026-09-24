@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,12 @@ for d in (SOURCE_DIR, DEST_DIR, EXPORT_DIR):
 app = Flask(__name__)
 
 
+@app.errorhandler(Exception)
+def _errore_generico(exc):  # noqa: BLE001
+    traceback.print_exc()
+    return jsonify({"errore": "Errore interno del server"}), 500
+
+
 def _xlsx_files(cartella: Path) -> list[str]:
     return sorted(p.name for p in cartella.glob("*.xlsx"))
 
@@ -48,9 +55,11 @@ def _leggi_config() -> dict:
 
 
 def _scrivi_config(payload: dict) -> None:
-    CONFIG_PATH.write_text(
+    tmp = CONFIG_PATH.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(tmp, CONFIG_PATH)
 
 
 def _leggi_state() -> dict:
@@ -63,14 +72,13 @@ def _leggi_state() -> dict:
 
 
 def _scrivi_state(ultimi: list) -> None:
-    STATE_PATH.write_text(
-        json.dumps(
-            {"ultimi_valori": ultimi, "data": datetime.now().isoformat()},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    payload = {
+        "ultimi_valori": ultimi,
+        "data": datetime.now().isoformat(),
+    }
+    tmp = STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, STATE_PATH)
 
 
 def _estraai_tutti(cfg: dict) -> list[dict]:
@@ -84,7 +92,11 @@ def _estraai_tutti(cfg: dict) -> list[dict]:
             estratti.append(a_)
             continue
         a_ = dict(a)
-        a_["valori"] = estrai_colonna(path, int(a_["riga_etichetta"]))
+        try:
+            a_["valori"] = estrai_colonna(path, int(a_["riga_etichetta"]))
+        except (TypeError, ValueError):
+            a_["valori"] = []
+            a_["errore"] = "riga_etichetta non valida"
         estratti.append(a_)
     return estratti
 
@@ -108,7 +120,7 @@ def _compila_tutti(cfg: dict, estratti: list[dict]) -> list[dict]:
             )
             continue
         riga, colonna = pos
-        scrivi_sotto(dest, riga, colonna, e.get("valori", []))
+        scritti = scrivi_sotto(dest, riga, colonna, e.get("valori", []))
         esiti.append(
             {
                 "sorgente": e["sorgente"],
@@ -117,6 +129,7 @@ def _compila_tutti(cfg: dict, estratti: list[dict]) -> list[dict]:
                 "riga": riga,
                 "colonna": colonna,
                 "valori": e.get("valori", []),
+                "scritti": scritti,
             }
         )
     return esiti
@@ -180,6 +193,22 @@ def _colonna_lettera(n: int) -> str:
     return s
 
 
+def _nome_foglio_valido(etichetta: str) -> str:
+    """Nome foglio Excel ammissibile (niente caratteri vietati, max 31 char)."""
+    nome = re.sub(r"[\\/*?:\[\]]", "_", str(etichetta)).strip() or "ARGOMENTO"
+    return nome[:31]
+
+
+def _nome_export_sicuro(nome: str) -> str:
+    """Ricava un nome file valido dentro EXPORT_DIR (niente path traversal né
+    caratteri illegali)."""
+    base = Path(nome or "").name.strip() or "esportazione.xlsx"
+    base = re.sub(r"[\\/*?:<>\"|]", "_", base)
+    if not base.lower().endswith(".xlsx"):
+        base += ".xlsx"
+    return base
+
+
 @app.get("/api/config")
 def api_config():
     return jsonify(_leggi_config())
@@ -192,6 +221,12 @@ def api_aggiungi():
     riga = payload.get("riga_etichetta")
     if not all((sorgente, etichetta, riga)):
         return jsonify({"errore": "Parametri mancanti"}), 400
+    try:
+        riga_n = int(riga)
+    except (TypeError, ValueError):
+        return jsonify({"errore": f"Riga non valida: {riga}"}), 400
+    if riga_n < 1:
+        return jsonify({"errore": "Riga non valida"}), 400
     path = SOURCE_DIR / sorgente
     if not path.exists():
         return jsonify({"errore": "File sorgente non trovato"}), 404
@@ -202,7 +237,7 @@ def api_aggiungi():
     )
     if not duplicato:
         cfg["argomenti"].append(
-            {"sorgente": sorgente, "etichetta": etichetta, "riga_etichetta": int(riga)}
+            {"sorgente": sorgente, "etichetta": etichetta, "riga_etichetta": riga_n}
         )
         _scrivi_config(cfg)
     return jsonify(cfg)
@@ -246,7 +281,16 @@ def api_modella():
     if not path.exists():
         return jsonify({"errore": "Scheda non trovata"}), 404
     try:
-        crea_voce(path, str(testo), int(riga), colonna_a_numero(colonna))
+        riga_n = int(riga)
+        colonna_n = colonna_a_numero(colonna)
+    except ValueError as exc:
+        return jsonify({"errore": str(exc)}), 400
+    if riga_n < 1 or riga_n > 1_048_576:
+        return jsonify({"errore": f"Riga fuori range: {riga_n}"}), 400
+    if colonna_n < 1 or colonna_n > 16_384:
+        return jsonify({"errore": f"Colonna fuori range: {colonna}"}), 400
+    try:
+        crea_voce(path, str(testo), riga_n, colonna_n)
     except ValueError as exc:
         return jsonify({"errore": str(exc)}), 400
     return jsonify({"ok": True})
@@ -264,9 +308,7 @@ def api_compila():
 def api_export():
     """Salva con nome: esporta tutti gli argomenti configurati in un xlsx."""
     payload = request.get_json(force=True)
-    nome = payload.get("nome", "").strip() or "esportazione.xlsx"
-    if not nome.lower().endswith(".xlsx"):
-        nome += ".xlsx"
+    nome = _nome_export_sicuro(payload.get("nome", ""))
     cfg = _leggi_config()
     estratti = _estraai_tutti(cfg)
     if not estratti:
@@ -277,10 +319,7 @@ def api_export():
     wb = Workbook()
     wb.remove(wb.active)
     for e in estratti:
-        if len(e["etichetta"]) > 31:
-            nome_foglio = e["etichetta"][:31]
-        else:
-            nome_foglio = e["etichetta"]
+        nome_foglio = _nome_foglio_valido(e["etichetta"])
         ws = wb.create_sheet(title=nome_foglio)
         ws["A1"] = "ARGOMENTO"
         ws["B1"] = "VALORE"

@@ -125,11 +125,13 @@ def trova_cella_etichetta(path: Path, testo: str):
     return None
 
 
-def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> None:
+def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
     """Svuota il blocco sotto l'etichetta e ci scrive i nuovi valori.
 
     Il vecchio blocco viene individuato con la stessa regola della lettura:
     valori consecutivi fino alle due righe vuote consecutive.
+    La scrittura si ferma prima di un'eventuale etichetta in grassetto
+    sottostante (non la sovrascrive mai). Ritorna il numero di valori scritti.
     """
     wb = carica_workbook(path)
     ws = wb.active
@@ -148,9 +150,16 @@ def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> None:
             cell.value = None
             cleared += 1
         r += 1
+    scritti = 0
     for i, v in enumerate(valori, start=riga + 1):
-        ws.cell(row=i, column=colonna, value=v)
+        cell = ws.cell(row=i, column=colonna)
+        if _cell_is_bold(cell):
+            break
+        cell.value = v
+        scritti += 1
+    wb.close()
     wb.save(path)
+    return scritti
 
 
 def crea_voce(path: Path, testo: str, riga: int, colonna: int) -> None:
@@ -159,6 +168,7 @@ def crea_voce(path: Path, testo: str, riga: int, colonna: int) -> None:
     ws = wb.active
     cell = ws.cell(row=riga, column=colonna, value=testo)
     cell.font = Font(bold=True)
+    wb.close()
     wb.save(path)
 
 

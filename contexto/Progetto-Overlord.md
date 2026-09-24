@@ -32,12 +32,22 @@ Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata
 - [MEDIA] Euristiche parser (grassetto-titolo, font size) NON ancora validate su file reali dell'utente — da testare insieme (fonte: contesto utente).
 - [INFO] n8n non avviato; email non integrata (fonte: contesto utente).
 - [INFO] Config/state attualmente vuoti o parziali (residuo di test): destinazione null, un solo argomento, state resettato. Da ripristinare/popolare prima dell'uso reale.
+- [BASSA] `scrivi_sotto` (fissata) non scrive più oltre una etichetta grassetto: se i valori da scrivere superano lo spazio disponibile, vengono scartati e segnalati nel campo `scritti` dell'esito (`api/compila`/`api/elabora`); comportamenti da confermare con l'utente.
 
-## ✅ Correzioni applicate
-- Nessuna correzione registrata in questo ciclo: stato di sviluppo funzionante, non di correzione.
+## ✅ Correzioni applicate (bughunt esteso, set 24)
+Applicati i principi delle istruzioni del cliente (`~/Scrivania/CLAUDE.md`, `DIRECTIVES.md`): verificare prima di dichiarare, autorità spec > piano > codice, non toccare gli invarianti del parser, isolamento dei test. Le regole del parser (1 riga vuota = buco; 2 vuote = fine blocco; etichetta grassetto sopra; scrittura sotto etichetta omonima) sono INVIOLATE e ora coperte da test.
+
+1. **Export sicuro** (`app/app.py`): nuovo `_nome_export_sicuro` (solo basename, mai path traversal, caratteri illegali Windows `<>:"/\|?*` sostituiti, estensione `.xlsx` forzata) e `_nome_foglio_valido` (caratteri vietati Excel `\ * ? : [ ]` → `_`, max 31 char, fallback "ARGOMENTO"). Prima un nome del tipo `../../fuga.xlsx` scriveva fuori da `export/`.
+2. **`scrivi_sotto` guardato** (`app/parser.py`): ora ritorna il numero di valori scritti e NON sovrascrive mai un'etichetta in grassetto sottostante (si ferma prima); aggiunto `wb.close()`.
+3. **Scritture atomiche** config/state (`app/app.py`): `_scrivi_config` e `_scrivi_state` scrivono su `.tmp` e fanno `os.replace` (niente file corrotti in caso di crash a metà).
+4. **`api_modella` validato**: risp. 400 su riga fuori range (1..1.048.576), colonna fuori range (1..16.384) o colonna non alfanumerica; `api_aggiungi` accetta solo `riga_etichetta` numerica.
+5. **Errori puliti**: `_errore_generico` (handler globale) → JSON `{"errore": "Errore interno del server"}` con status 500 + traceback su console; `_estraai_tutti` tollera `riga_etichetta` non valida (restituisce `errore` per quell'argomento).
+6. **Suite pytest** (`tests/`, isolata su tmp_path/venv): 26 test verdi (`app/.venv/bin/python -m pytest tests -q` → `26 passed`) — coprono parser (trova/estrai/scrivi/crea voce) e API (ciclo aggiungi→compila→elabora×2 con "nessuna variazione", export traversal/caratteri vietati, download 404, modella, rimuovi).
+7. **E2E live verificato** su server 8010 (reloader attivo): VELOCITA' e CO2 compilati al posto giusto (B4-B7, E22-E24), vecchi valori svuotati, seconda `api/elabora` → "nessuna variazione", export con path traversal bloccato in `export/`. Mockups/config/state ripristinati dopo il test.
 
 ## 📌 Prossimi passi
-1. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5).
+1. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5). Aggiungere test a `tests/` per eventuali nuovi regole emerse.
 2. Attivare n8n (`docker compose --profile auto up -d`) e agganciare `/api/elabora` come bridge di automazione.
 3. (Futuro) Integrare notifiche email.
 4. Push del progetto su GitHub `Tox-oss/Progetto-Overlord` (branch main) con `.gitignore` per `.venv` e temporanei.
+5. Documentare nel README il comando di test: `app/.venv/bin/python -m pytest tests -q` (venv già esistente con pytest 9.1.1; `tests/conftest.py` genera mockup isolati in tmp_path).
