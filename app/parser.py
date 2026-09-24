@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Font
 
 
@@ -30,6 +31,27 @@ def _cell_is_bold(cell) -> bool:
     if font is None:
         return False
     return bool(font.bold)
+
+
+def _cell_is_merged(cell) -> bool:
+    """True se la cella appartiene a un intervallo unito."""
+    return isinstance(cell, MergedCell)
+
+
+def _cella_in_unione(ws, riga: int, colonna: int) -> bool:
+    """True se la cella (riga, colonna) cade dentro un intervallo unito."""
+    for intervallo in ws.merged_cells.ranges:
+        if intervallo.min_row <= riga <= intervallo.max_row and (
+            intervallo.min_col <= colonna <= intervallo.max_col
+        ):
+            return True
+    return False
+
+
+def _cell_is_ostacolo(ws, riga: int, colonna: int, cell=None) -> bool:
+    """Una cella che delimita lo spazio scrivibile sotto un'etichetta:
+    un'altra etichetta (grassetto) o una cella unita (anch'essa non tocabile)."""
+    return _cell_is_bold(cell) or _cella_in_unione(ws, riga, colonna)
 
 
 def carica_workbook(path: Path):
@@ -48,6 +70,9 @@ def trova_argomenti(path: Path, colonna: int = 1) -> list[Argomento]:
     for row in ws.iter_rows(min_row=1, min_col=colonna, max_col=colonna):
         for cell in row:
             if cell.value is None or not _cell_is_bold(cell):
+                continue
+            sz = cell.font.size if cell.font else None
+            if sz is not None and sz > 11.5:
                 continue
             sotto = ws.cell(row=cell.row + 1, column=colonna)
             if sotto.value is not None and _cell_is_bold(sotto):
@@ -87,8 +112,12 @@ def trova_argomenti_ovunque(path: Path) -> list[Argomento]:
 
 
 def estrai_colonna(path: Path, riga_etichetta: int, colonna: int = 1) -> list:
-    """Valori sotto l'etichetta, fino alle due righe vuote consecutive."""
-    wb = carica_workbook(path)
+    """Valori sotto l'etichetta, fino alle due righe vuote consecutive.
+
+    Legge con `data_only=True`: i valori delle formule vengono restituiti come
+    calcolati (la cella `=10+1` vale 11), non come stringa.
+    """
+    wb = load_workbook(path, data_only=True)
     ws = wb.active
     valori: list = []
     vuote = 0
@@ -125,13 +154,34 @@ def trova_cella_etichetta(path: Path, testo: str):
     return None
 
 
+def _spazio_libero(ws, riga: int, colonna: int, soglia: int | None = None) -> int:
+    """Celle successive alla riga dati che NON possono essere sovrascritte:
+    si contano finché non si incontra una cella grassetto (etichetta) o unita.
+
+    Se `soglia` è data, la conta si ferma appena la raggiunge: sapere che c'è
+    abbastanza spazio basta. Se nessun ostacolo delimita il blocco, lo spazio
+    è illimitato (Excel crea celle al volo): la conta non guarda max_row.
+    """
+    tetto = soglia if soglia is not None else 100_000
+    n = 0
+    r = riga + 1
+    while n < tetto:
+        cell = ws.cell(row=r, column=colonna)
+        if _cell_is_ostacolo(ws, r, colonna, cell):
+            break
+        n += 1
+        r += 1
+    return n
+
+
 def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
     """Svuota il blocco sotto l'etichetta e ci scrive i nuovi valori.
 
     Il vecchio blocco viene individuato con la stessa regola della lettura:
-    valori consecutivi fino alle due righe vuote consecutive.
-    La scrittura si ferma prima di un'eventuale etichetta in grassetto
-    sottostante (non la sovrascrive mai). Ritorna il numero di valori scritti.
+    valori consecutivi fino alle due righe vuote consecutive. La cancellazione
+    NON tocca mai celle in grassetto (etichette) né celle unite. La scrittura
+    si ferma prima di un'eventuale cella grassetto o unita (non la
+    sovrascrive mai). Ritorna il numero di valori scritti.
     """
     wb = carica_workbook(path)
     ws = wb.active
@@ -140,6 +190,8 @@ def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
     cleared = 0
     while r <= ws.max_row:
         cell = ws.cell(row=r, column=colonna)
+        if _cell_is_ostacolo(ws, r, colonna, cell):
+            break
         v = cell.value
         if v is None or (isinstance(v, str) and not v.strip()):
             vuote += 1
@@ -153,7 +205,7 @@ def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
     scritti = 0
     for i, v in enumerate(valori, start=riga + 1):
         cell = ws.cell(row=i, column=colonna)
-        if _cell_is_bold(cell):
+        if _cell_is_ostacolo(ws, i, colonna, cell):
             break
         cell.value = v
         scritti += 1

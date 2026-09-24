@@ -202,3 +202,301 @@ def test_modella_colonna_invalida(client):
         "destinazione": "scheda.xlsx", "testo": "X", "riga": 1, "colonna": "1",
     })
     assert r.status_code == 400
+
+
+@pytest.fixture()
+def app2(tmp_path: Path, monkeypatch):
+    """Variante con 2 sorgenti (uno con date) e scheda piu' stretta."""
+    import app as appmod
+
+    files = tmp_path / "files2"
+    (files / "source").mkdir(parents=True)
+    (files / "dest").mkdir()
+    (files / "export").mkdir()
+    (files / "config").mkdir()
+    (files / "state").mkdir()
+
+    monkeypatch.setattr(appmod, "SOURCE_DIR", files / "source")
+    monkeypatch.setattr(appmod, "DEST_DIR", files / "dest")
+    monkeypatch.setattr(appmod, "EXPORT_DIR", files / "export")
+    monkeypatch.setattr(appmod, "CONFIG_PATH", files / "config" / "selezione.json")
+    monkeypatch.setattr(appmod, "STATE_PATH", files / "state" / "last_value.json")
+
+    from datetime import datetime
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    # sorgente A: ALFA con 5 valori (troppi per la scheda stretta)
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "ALFA"
+    ws["A1"].font = Font(bold=True)
+    for i, v in enumerate([1, 2, 3, 4, 5], start=2):
+        ws.cell(row=i, column=1, value=v)
+    wb.save(files / "source" / "a.xlsx")
+
+    # sorgente DATA con una cella datetime
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "DATA"
+    ws["A1"].font = Font(bold=True)
+    ws["A2"] = datetime(2026, 9, 1, 10, 30)
+    wb.save(files / "source" / "data.xlsx")
+
+    # scheda: ALFA con spazio per 1 solo valore, poi etichetta BETA subito sotto
+    wb = Workbook()
+    ws = wb.active
+    ws["B2"] = "ALFA"
+    ws["B2"].font = Font(bold=True)
+    ws["B3"] = 1
+    ws["B5"] = "BETA"
+    ws["B5"].font = Font(bold=True)
+    ws["E7"] = "DATA"
+    ws["E7"].font = Font(bold=True)
+    wb.save(files / "dest" / "scheda.xlsx")
+
+    appmod.app.config["TESTING"] = True
+    return appmod
+
+
+@pytest.fixture()
+def client2(app2):
+    return app2.app.test_client()
+
+
+def test_argomenti_path_traversal_negato(client2):
+    """Finding 4: niente lettura fuori da SOURCE_DIR da /api/argomenti."""
+    r = client2.get("/api/argomenti?file=../../segreto.xlsx")
+    assert r.status_code == 404
+
+
+def test_scheda_path_traversal_negato(client2):
+    """Finding 4: niente lettura fuori da DEST_DIR da /api/scheda."""
+    r = client2.get("/api/scheda?file=../../segreto.xlsx")
+    assert r.status_code == 404
+
+
+def test_aggiungi_path_traversal_negato(app2, client2):
+    """Finding 4: niente sorgente fuori da SOURCE_DIR in /api/aggiungi."""
+    r = client2.post("/api/aggiungi", json={
+        "sorgente": "../../segreto.xlsx", "etichetta": "X", "riga_etichetta": 1,
+    })
+    assert r.status_code == 404
+
+
+def test_modella_path_traversal_negato(app2, client2):
+    """Finding 4: niente scrittura fuori da DEST_DIR in /api/modella."""
+    r = client2.post("/api/modella", json={
+        "destinazione": "../../segreto.xlsx", "testo": "X", "riga": 1, "colonna": "A",
+    })
+    assert r.status_code == 404
+
+
+def test_destinazione_path_traversal_negato(client2):
+    """Finding 4: /api/destinazione rifiuta un nome pericoloso."""
+    r = client2.post("/api/destinazione", json={"destinazione": "../../segreto.xlsx"})
+    assert r.status_code == 400
+
+
+def test_elabora_spazio_insufficiente_all_or_nothing(app2, client2):
+    """Finding 2+7: con 5 valori ma spazio per 1, NON si compila nulla,
+    lo stato NON viene salvato, e il secondo giro non dice 'nessuna variazione'."""
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
+    })
+    client2.post("/api/aggiungi", json={
+        "sorgente": "data.xlsx", "etichetta": "DATA", "riga_etichetta": 1,
+    })
+    client2.post("/api/destinazione", json={"destinazione": "scheda.xlsx"})
+
+    r1 = client2.post("/api/elabora")
+    d1 = r1.get_json()
+    assert r1.status_code == 200
+    assert d1["ok"] is False
+    assert any("spazio insufficiente" in e.get("errore", "") for e in d1["esiti"])
+
+    # niente salvato su disco: secondo giro ripete il tentativo (non congelato)
+    r2 = client2.post("/api/elabora")
+    assert r2.get_json()["ok"] is False
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
+    ws = wb.active
+    # BETA (riga 5) NON deve essere stata svuotata
+    assert ws["B5"].value == "BETA"
+    wb.close()
+
+
+def test_elabora_sorgente_mancante_non_svuota(client2):
+    """Finding 3: sorgente sparita -> ok:false e la scheda NON viene svuotata."""
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
+    })
+    client2.post("/api/destinazione", json={"destinazione": "scheda.xlsx"})
+
+    # config punta a a.xlsx; lo cancelliamo per simulare la sparizione
+    import pathlib
+    import app as appmod
+
+    (appmod.SOURCE_DIR / "a.xlsx").unlink()
+
+    # abbiamo gia' un valore in B3; deve restare
+    r = client2.post("/api/elabora")
+    assert r.get_json()["ok"] is False
+    assert any(e.get("errore") == "sorgente mancante" for e in r.get_json()["esiti"])
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(appmod.DEST_DIR / "scheda.xlsx")
+    assert wb.active["B3"].value == 1
+    assert wb.active["B2"].value == "ALFA"
+    wb.close()
+
+
+def test_elabora_datetime_stato_serializzato(app2, client2):
+    """Finding 5: valori data/ora NON fanno esplodere il salvataggio dello stato."""
+    from datetime import datetime
+
+    client2.post("/api/aggiungi", json={
+        "sorgente": "data.xlsx", "etichetta": "DATA", "riga_etichetta": 1,
+    })
+    client2.post("/api/destinazione", json={"destinazione": "scheda.xlsx"})
+
+    r1 = client2.post("/api/elabora")
+    assert r1.status_code == 200
+    assert r1.get_json()["ok"] is True
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
+    ws = wb.active
+    assert ws["E7"].value == "DATA"
+    assert ws["E8"].value == datetime(2026, 9, 1, 10, 30)
+
+    # secondo giro: nessuna variazione (il confronto regge sui serializzati)
+    r2 = client2.post("/api/elabora")
+    assert r2.get_json()["ok"] is False
+    assert "nessuna variazione" in r2.get_json()["motivo"]
+
+
+def test_elabora_destinazione_mancante_ok_false(app2, client2):
+    """Finding 6: destinazione impostata ma file sparito -> ok:false, stato non salvato."""
+    import app as appmod
+
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
+    })
+    client2.post("/api/destinazione", json={"destinazione": "scheda.xlsx"})
+    (appmod.DEST_DIR / "scheda.xlsx").unlink()
+
+    r1 = client2.post("/api/elabora")
+    d1 = r1.get_json()
+    assert d1["ok"] is False
+    assert "non trovato" in (d1.get("motivo") or "")
+
+    # stato non salvato: ripristino il file e il giro dopo compila davvero
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws["B2"] = "ALFA"
+    ws["B2"].font = Font(bold=True)
+    wb.save(appmod.DEST_DIR / "scheda.xlsx")
+
+    r2 = client2.post("/api/elabora")
+    assert r2.get_json()["ok"] is True
+
+
+def test_export_nome_foglio_unico_per_argomento(app2, client2):
+    """Finding 13 (controllo base): un argomento produce un solo foglio."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "CO2"
+    ws["A1"].font = openpyxl.styles.Font(bold=True)
+    ws["A2"] = 1
+    wb.save(app2.SOURCE_DIR / "arb.xlsx")
+    wb.close()
+
+    client2.post("/api/aggiungi", json={
+        "sorgente": "arb.xlsx", "etichetta": "CO2", "riga_etichetta": 1,
+    })
+    r = client2.post("/api/export", json={"nome": "out.xlsx"})
+    assert r.status_code == 200
+    wb = openpyxl.load_workbook(app2.EXPORT_DIR / "out.xlsx")
+    assert wb.sheetnames == ["CO2"]
+    wb.close()
+
+
+def test_export_dedup_etichette_distinte_collidono(app2, client2):
+    """Finding 13: 'VEL/OCITA' e 'VEL:OCITA' collidono dopo la sanificazione
+    in '_' e vengono distinte con suffisso numerico."""
+    import openpyxl
+
+    src = app2.SOURCE_DIR / "b.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["A1"] = "VEL/OCITA'"
+    ws["A1"].font = openpyxl.styles.Font(bold=True)
+    ws["A2"] = 1
+    ws["A4"] = "VEL:OCITA'"
+    ws["A4"].font = openpyxl.styles.Font(bold=True)
+    ws["A5"] = 2
+    wb.save(src)
+    wb.close()
+
+    client2.post("/api/aggiungi", json={
+        "sorgente": "b.xlsx", "etichetta": "VEL/OCITA'", "riga_etichetta": 1,
+    })
+    client2.post("/api/aggiungi", json={
+        "sorgente": "b.xlsx", "etichetta": "VEL:OCITA'", "riga_etichetta": 4,
+    })
+
+    r = client2.post("/api/export", json={"nome": "out.xlsx"})
+    assert r.status_code == 200
+    wb = openpyxl.load_workbook(app2.EXPORT_DIR / "out.xlsx")
+    assert wb.sheetnames[0] == "VEL_OCITA'"
+    assert wb.sheetnames[1] == "VEL_OCITA'_2"
+    wb.close()
+
+
+def test_compila_ersenza_destinazione_400(app2, client2):
+    """Finding 11 (server): compila senza scheda risponde 400 con errore."""
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
+    })
+    r = client2.post("/api/compila")
+    assert r.status_code == 400
+    assert "Destinazione" in r.get_json()["errore"]
+
+
+def test_elabora_incompleta_non_salva_stato_e_non_svuota(app2, client2):
+    """Finding 7: seconda etichetta non in scheda -> la prima NON viene scritta."""
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
+    })
+    # GAMMA non esiste nella scheda
+    client2.post("/api/aggiungi", json={
+        "sorgente": "a.xlsx", "etichetta": "GAMMA", "riga_etichetta": 1,
+    })
+    client2.post("/api/destinazione", json={"destinazione": "scheda.xlsx"})
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
+    prima = wb.active["B3"].value
+    wb.close()
+
+    r = client2.post("/api/elabora")
+    d = r.get_json()
+    assert d["ok"] is False
+    assert any(not e.get("trovata") for e in d["esiti"])
+
+    # la scheda NON e' stata toccata: il vecchio valore in B3 resta
+    wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
+    assert wb.active["B3"].value == prima
+    wb.close()

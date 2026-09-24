@@ -2,12 +2,15 @@ import json
 import os
 import re
 import traceback
-from datetime import datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
 
 from parser import (
+    _spazio_libero,
+    carica_workbook,
     colonna_a_numero,
     crea_voce,
     estrai_colonna,
@@ -31,6 +34,29 @@ for d in (SOURCE_DIR, DEST_DIR, EXPORT_DIR):
 app = Flask(__name__)
 
 
+def _nome_valido(nome) -> bool:
+    """True se `nome` è un file di livello singolo (niente separatori/`..`)."""
+    return bool(
+        nome
+        and isinstance(nome, str)
+        and Path(nome).name == nome
+        and ".." not in nome
+    )
+
+
+def _risolvi_in(cartella: Path, nome) -> Path | None:
+    """Risolvi `nome` dentro `cartella` (niente path traversal).
+
+    Ritorna il Path se il file esiste dentro la cartella, altrimenti None.
+    """
+    if not _nome_valido(nome):
+        return None
+    path = (cartella / nome).resolve()
+    if not path.exists() or path.parent != cartella.resolve():
+        return None
+    return path
+
+
 @app.errorhandler(Exception)
 def _errore_generico(exc):  # noqa: BLE001
     traceback.print_exc()
@@ -52,6 +78,32 @@ def _leggi_config() -> dict:
     cfg.setdefault("destinazione", None)
     cfg.setdefault("argomenti", [])
     return cfg
+
+
+def _valore_seriale(v):
+    """Converte un valore Excel in qualcosa che `json.dumps` sa serializzare.
+
+    Le celle data/ora sono `datetime`/`date`, talvolta `Decimal`: senza questa
+    conversione il salvataggio dello stato fa esplodere `json.dumps`.
+    """
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, time):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+def _estratti_seriali(estratti: list[dict]) -> list[dict]:
+    out = []
+    for e in estratti:
+        a_ = dict(e)
+        a_["valori"] = [_valore_seriale(v) for v in a_.get("valori", [])]
+        out.append(a_)
+    return out
 
 
 def _scrivi_config(payload: dict) -> None:
@@ -84,6 +136,12 @@ def _scrivi_state(ultimi: list) -> None:
 def _estraai_tutti(cfg: dict) -> list[dict]:
     estratti = []
     for a in cfg.get("argomenti", []):
+        if not _nome_valido(a.get("sorgente")):
+            a_ = dict(a)
+            a_["valori"] = []
+            a_["errore"] = "sorgente non valido"
+            estratti.append(a_)
+            continue
         path = SOURCE_DIR / a["sorgente"]
         if not path.exists():
             a_ = dict(a)
@@ -101,38 +159,69 @@ def _estraai_tutti(cfg: dict) -> list[dict]:
     return estratti
 
 
-def _compila_tutti(cfg: dict, estratti: list[dict]) -> list[dict]:
+def _compila_tutti(cfg: dict, estratti: list[dict]) -> dict:
+    """Compila la scheda: tutto-o-niente.
+
+    Verifica PRIMA di scrivere che tutti gli argomenti siano estraibili
+    (niente errori), trovati in scheda e che lo spazio sotto l'etichetta basti
+    a contenere i valori. Al primo problema torna `{completa: False, esiti}`
+    SENZA toccare la scheda. Solo se tutto è verificato scrive e salva.
+    """
     if not cfg.get("destinazione"):
-        return [{"errore": "Destinazione non configurata"}]
-    dest = DEST_DIR / cfg["destinazione"]
-    if not dest.exists():
-        return [{"errore": "File di destinazione non trovato"}]
-    esiti = []
+        return {"completa": False, "esiti": [], "errore": "Destinazione non configurata"}
+    dest = _risolvi_in(DEST_DIR, cfg["destinazione"])
+    if not dest:
+        return {
+            "completa": False,
+            "esiti": [],
+            "errore": "File di destinazione non trovato",
+        }
+
+    wb = carica_workbook(dest)
+    ws = wb.active
+
+    phase = []
     for e in estratti:
+        voce = {
+            "sorgente": e.get("sorgente"),
+            "etichetta": e.get("etichetta"),
+            "trovata": False,
+        }
+        if e.get("errore"):
+            voce["errore"] = e["errore"]
+            phase.append(("errore", voce))
+            continue
         pos = trova_cella_etichetta(dest, e["etichetta"])
         if pos is None:
-            esiti.append(
-                {
-                    "sorgente": e["sorgente"],
-                    "etichetta": e["etichetta"],
-                    "trovata": False,
-                }
-            )
+            phase.append(("non_trovata", voce))
             continue
         riga, colonna = pos
-        scritti = scrivi_sotto(dest, riga, colonna, e.get("valori", []))
-        esiti.append(
-            {
-                "sorgente": e["sorgente"],
-                "etichetta": e["etichetta"],
-                "trovata": True,
-                "riga": riga,
-                "colonna": colonna,
-                "valori": e.get("valori", []),
-                "scritti": scritti,
-            }
-        )
-    return esiti
+        valori = e.get("valori", [])
+        if not valori:
+            voce["errore"] = "nessun valore estratto dalla sorgente"
+            phase.append(("spazio", voce))
+            continue
+        spazio = _spazio_libero(ws, riga, colonna, soglia=len(valori))
+        if len(valori) > spazio:
+            voce["errore"] = (
+                f"spazio insufficiente ({len(valori)} valori, {spazio} righe libere)"
+            )
+            phase.append(("spazio", voce))
+            continue
+        voce.update({"trovata": True, "riga": riga, "colonna": colonna, "valori": valori})
+        phase.append(("ok", voce))
+
+    wb.close()
+
+    completata = all(kind == "ok" for kind, _ in phase)
+    if not completata:
+        return {"completa": False, "esiti": [v for _, v in phase]}
+
+    for e, (_kind, voce) in zip(estratti, phase):
+        if voce.get("errore"):
+            continue
+        voce["scritti"] = scrivi_sotto(dest, voce["riga"], voce["colonna"], e.get("valori", []))
+    return {"completa": True, "esiti": [v for _, v in phase]}
 
 
 @app.get("/")
@@ -153,8 +242,8 @@ def api_destinazioni():
 @app.get("/api/argomenti")
 def api_argomenti():
     nome = request.args.get("file", "")
-    path = SOURCE_DIR / nome
-    if not path.exists():
+    path = _risolvi_in(SOURCE_DIR, nome)
+    if not path:
         return jsonify({"errore": "File sorgente non trovato"}), 404
     argomenti = [
         {
@@ -170,8 +259,8 @@ def api_argomenti():
 @app.get("/api/scheda")
 def api_scheda():
     nome = request.args.get("file", "")
-    path = DEST_DIR / nome
-    if not path.exists():
+    path = _risolvi_in(DEST_DIR, nome)
+    if not path:
         return jsonify({"errore": "Scheda non trovata"}), 404
     voci = [
         {
@@ -227,8 +316,8 @@ def api_aggiungi():
         return jsonify({"errore": f"Riga non valida: {riga}"}), 400
     if riga_n < 1:
         return jsonify({"errore": "Riga non valida"}), 400
-    path = SOURCE_DIR / sorgente
-    if not path.exists():
+    path = _risolvi_in(SOURCE_DIR, sorgente)
+    if not path:
         return jsonify({"errore": "File sorgente non trovato"}), 404
     cfg = _leggi_config()
     duplicato = any(
@@ -260,8 +349,11 @@ def api_rimuovi():
 @app.post("/api/destinazione")
 def api_destinazione():
     payload = request.get_json(force=True)
+    destinazione = payload.get("destinazione")
+    if destinazione is not None and not _nome_valido(destinazione):
+        return jsonify({"errore": "Nome scheda non valido"}), 400
     cfg = _leggi_config()
-    cfg["destinazione"] = payload.get("destinazione")
+    cfg["destinazione"] = destinazione
     _scrivi_config(cfg)
     return jsonify(cfg)
 
@@ -277,8 +369,8 @@ def api_modella():
     colonna = payload.get("colonna")
     if not all((scheda, testo, riga, colonna)):
         return jsonify({"errore": "Parametri mancanti"}), 400
-    path = DEST_DIR / scheda
-    if not path.exists():
+    path = _risolvi_in(DEST_DIR, scheda)
+    if not path:
         return jsonify({"errore": "Scheda non trovata"}), 404
     try:
         riga_n = int(riga)
@@ -301,7 +393,14 @@ def api_compila():
     cfg = _leggi_config()
     estratti = _estraai_tutti(cfg)
     esiti = _compila_tutti(cfg, estratti)
-    return jsonify({"esiti": esiti})
+    if not esiti.get("completa"):
+        return jsonify(
+            {
+                "errore": esiti.get("errore") or "Compilazione non eseguita",
+                "esiti": esiti["esiti"],
+            }
+        ), 400
+    return jsonify({"esiti": esiti["esiti"]})
 
 
 @app.post("/api/export")
@@ -318,8 +417,15 @@ def api_export():
 
     wb = Workbook()
     wb.remove(wb.active)
+    usati: set[str] = set()
     for e in estratti:
         nome_foglio = _nome_foglio_valido(e["etichetta"])
+        if nome_foglio.lower() in usati:
+            suffisso = 2
+            while f"{nome_foglio}_{suffisso}".lower() in usati:
+                suffisso += 1
+            nome_foglio = f"{nome_foglio}_{suffisso}"
+        usati.add(nome_foglio.lower())
         ws = wb.create_sheet(title=nome_foglio)
         ws["A1"] = "ARGOMENTO"
         ws["B1"] = "VALORE"
@@ -349,24 +455,24 @@ def api_elabora():
             return jsonify({"ok": False, "motivo": "configurazione incompleta"}), 200
         estratti = _estraai_tutti(cfg)
 
-        for e in estratti:
-            e.pop("riga_etichetta", None)
+        estratti_seriali = _estratti_seriali(estratti)
 
         stato = _leggi_state()
-        if stato.get("ultimi_valori") == estratti:
+        if stato.get("ultimi_valori") == estratti_seriali:
             return jsonify({"ok": False, "motivo": "nessuna variazione"}), 200
 
         esiti = _compila_tutti(cfg, estratti)
-        if any(not x.get("trovata", True) for x in esiti):
-            non_trovate = [
-                x["etichetta"] for x in esiti if not x.get("trovata", True)
-            ]
+        if not esiti.get("completa"):
             return jsonify(
-                {"ok": False, "motivo": "voci non trovate nella scheda", "voci": non_trovate}
+                {
+                    "ok": False,
+                    "motivo": esiti.get("errore") or "compilazione non eseguita",
+                    "esiti": esiti["esiti"],
+                }
             ), 200
 
-        _scrivi_state(estratti)
-        return jsonify({"ok": True, "esiti": esiti})
+        _scrivi_state(estratti_seriali)
+        return jsonify({"ok": True, "esiti": esiti["esiti"]})
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         return jsonify({"errore": str(exc)}), 500
@@ -374,4 +480,5 @@ def api_elabora():
 
 if __name__ == "__main__":
     porta = int(os.environ.get("PORT", 8010))
-    app.run(host="0.0.0.0", port=porta, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+    app.run(host="0.0.0.0", port=porta, debug=debug)

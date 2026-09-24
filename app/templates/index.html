@@ -148,6 +148,12 @@
     const selDest = $("selDest");
     const selScheda = $("selScheda");
 
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+
     function esitoOk(msg) {
       const e = $("esito");
       e.className = "esito ok";
@@ -184,7 +190,7 @@
         return;
       }
       let html = "<table><tr><th>#</th><th>Valore</th></tr>";
-      arg.valori.forEach((v, i) => { html += `<tr><td>${i + 1}</td><td>${v}</td></tr>`; });
+      arg.valori.forEach((v, i) => { html += `<tr><td>${i + 1}</td><td>${esc(v)}</td></tr>`; });
       html += "</table>";
       if (!arg.valori.length) html += '<p class="vuoto">Nessun valore sotto l&rsquo;etichetta.</p>';
       wrap.innerHTML = html;
@@ -200,19 +206,24 @@
       }
       let html = "<table><tr><th>Sorgente</th><th>Argomento</th><th>Riga</th><th></th></tr>";
       cfg.argomenti.forEach((a, i) => {
-        html += `<tr><td>${a.sorgente}</td><td>${a.etichetta}</td><td>${a.riga_etichetta}</td>` +
+        html += `<tr><td>${esc(a.sorgente)}</td><td>${esc(a.etichetta)}</td><td>${esc(a.riga_etichetta)}</td>` +
                 `<td><button class="pericolo" onclick="rimuoviArgomento(${i})">Rimuovi</button></td></tr>`;
       });
       html += "</table>";
       wrap.innerHTML = html;
-      $("btnCompila").disabled = false;
-      $("btnExport").disabled = false;
+      aggiornaBottoni(cfg);
+    }
+    function aggiornaBottoni(args) {
+      const haArgomenti = (args && args.argomenti && args.argomenti.length > 0);
+      const haScheda = Boolean(selDest.value);
+      $("btnCompila").disabled = !(haArgomenti && haScheda);
+      $("btnExport").disabled = !haArgomenti;
     }
     async function aggiornaConfig() {
       const cfg = await fetch("/api/config").then(r => r.json());
-      statoConfig(cfg);
       if (cfg.destinazione) { selDest.value = cfg.destinazione; }
       if (cfg.destinazione) { selScheda.value = cfg.destinazione; }
+      statoConfig(cfg);
       return cfg;
     }
     async function carica() {
@@ -268,7 +279,7 @@
         return;
       }
       let html = "<table><tr><th>Voce</th><th>Posizione</th></tr>";
-      voci.forEach(v => { html += `<tr><td>${v.etichetta}</td><td>${v.posizione}</td></tr>`; });
+      voci.forEach(v => { html += `<tr><td>${esc(v.etichetta)}</td><td>${esc(v.posizione)}</td></tr>`; });
       html += "</table>";
       wrap.innerHTML = html;
     }
@@ -314,17 +325,31 @@
           body: JSON.stringify({ destinazione: selDest.value }),
         });
       }
+      const cfg = await fetch("/api/config").then(r => r.json());
+      aggiornaBottoni(cfg);
     });
 
     $("btnCompila").addEventListener("click", async () => {
       const res = await fetch("/api/compila", { method: "POST" });
       const data = await res.json();
-      if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
+      if (!res.ok) {
+        const problemi = (data.esiti || [])
+          .map(e => {
+            if (e.errore) return `  NON COMPILATO  ${esc(e.etichetta)} — ${esc(e.errore)}`;
+            return `  NON TROVATA  ${esc(e.etichetta)}`;
+          }).join("\n");
+        return esitoErr("Compilazione non eseguita: " + (data.errore || "sconosciuto") +
+          (problemi ? "\n" + problemi : ""));
+      }
       const righe = data.esiti.map(e => {
-        if (e.trovata) {
-          return `  OK  ${e.etichetta} → ${colLettera(e.colonna)}${e.riga} (${e.valori.length} valori)`;
+        if (e.errore) {
+          return `  NON COMPILATO  ${esc(e.etichetta)} — ${esc(e.errore)}`;
         }
-        return `  NON TROVATA  ${e.etichetta}`;
+        if (e.trovata) {
+          const scritto = (e.scritti !== undefined) ? `${e.scritti}/${e.valori.length} ` : "";
+          return `  OK  ${esc(e.etichetta)} → ${colLettera(e.colonna)}${e.riga} (${scritto}valori)`;
+        }
+        return `  NON TROVATA  ${esc(e.etichetta)}`;
       }).join("\n");
       esitoOk("Compilazione:\n" + righe);
       await caricaVoci();
