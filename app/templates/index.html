@@ -241,26 +241,33 @@
       $("btnExport").disabled = !haArgomenti;
     }
     async function aggiornaConfig() {
-      const cfg = await fetch("/api/config").then(r => r.json());
-      if (cfg.destinazione) { selDest.value = cfg.destinazione; }
-      if (cfg.destinazione) { selScheda.value = cfg.destinazione; }
-      statoConfig(cfg);
-      return cfg;
+      try {
+        const cfg = await richiesta("/api/config").then(r => r.json());
+        if (cfg.destinazione) { selDest.value = cfg.destinazione; }
+        if (cfg.destinazione) { selScheda.value = cfg.destinazione; }
+        statoConfig(cfg);
+        return cfg;
+      } catch (e) {
+        statoConfig({ destinazione: null, argomenti: [] });
+        return { destinazione: null, argomenti: [] };
+      }
     }
     async function carica() {
-      const [sorgenti, dest] = await Promise.all([
-        fetch("/api/sorgenti").then(r => r.json()),
-        fetch("/api/destinazioni").then(r => r.json()),
-      ]);
-      fillSelect(selSorgente, sorgenti, "— scegli il file sorgente —");
-      fillSelect(selDest, dest, "— scegli la scheda finale —");
-      fillSelect(selScheda, dest, "— scegli una scheda —");
+      try {
+        const [sorgenti, dest] = await Promise.all([
+          richiesta("/api/sorgenti").then(r => r.json()),
+          richiesta("/api/destinazioni").then(r => r.json()),
+        ]);
+        fillSelect(selSorgente, sorgenti, "— scegli il file sorgente —");
+        fillSelect(selDest, dest, "— scegli la scheda finale —");
+        fillSelect(selScheda, dest, "— scegli una scheda —");
+      } catch (e) { /* richiesta() ha già mostrato l'errore di rete */ }
       await aggiornaConfig();
       await caricaVoci();
     }
     async function caricaArgomenti(nome, etichettaScelta) {
-      const res = await fetch("/api/argomenti?file=" + encodeURIComponent(nome));
-      if (!res.ok) return;
+      const res = await richiesta("/api/argomenti?file=" + encodeURIComponent(nome)).catch(() => null);
+      if (!res || !res.ok) return;
       const args = await res.json();
       selArgomento.innerHTML = "";
       const ph = document.createElement("option");
@@ -295,7 +302,9 @@
     async function mostraAnteprimaCorrente() {
       const a = argomentoScelto();
       if (!a) return mostraAnteprima(null, $("btnAggiungi"));
-      const args = await fetch("/api/argomenti?file=" + encodeURIComponent(a.sorgente)).then(r => r.json());
+      const args = await richiesta("/api/argomenti?file=" + encodeURIComponent(a.sorgente))
+        .then(r => r.json()).catch(() => null);
+      if (!args) return;
       const trovato = args.find(x => x.riga === a.riga_etichetta);
       mostraAnteprima(trovato, $("btnAggiungi"));
     }
@@ -304,7 +313,12 @@
       const wrap = $("listaVoci");
       $("btnModella").disabled = !nome;
       if (!nome) { wrap.innerHTML = ""; return; }
-      const voci = await fetch("/api/scheda?file=" + encodeURIComponent(nome)).then(r => r.json());
+      const voci = await richiesta("/api/scheda?file=" + encodeURIComponent(nome))
+        .then(r => r.json()).catch(() => null);
+      if (!voci) {
+        wrap.innerHTML = '<p class="vuoto">Scheda non raggiungibile.</p>';
+        return;
+      }
       if (!voci.length) {
         wrap.innerHTML = '<p class="vuoto">Nessuna voce in grassetto in questa scheda.</p>';
         return;
@@ -337,7 +351,9 @@
     }));
 
     window.rimuoviArgomento = conGuardia(async (indice) => {
-      const a = (await richiesta("/api/config").then(r => r.json())).argomenti[indice];
+      const cfg = await richiesta("/api/config").then(r => r.json());
+      const a = (cfg.argomenti || [])[indice];
+      if (!a) return esitoErr("Argomento non più presente nella configurazione.");
       const nuova = await richiesta("/api/rimuovi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

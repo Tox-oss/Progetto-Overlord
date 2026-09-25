@@ -29,19 +29,23 @@ EXPORT_DIR = FILES / "export"
 CONFIG_PATH = FILES / "config" / "selezione.json"
 STATE_PATH = FILES / "state" / "last_value.json"
 
-for d in (SOURCE_DIR, DEST_DIR, EXPORT_DIR):
+for d in (SOURCE_DIR, DEST_DIR, EXPORT_DIR, FILES / "config", FILES / "state"):
     d.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 
 
 def _nome_valido(nome) -> bool:
-    """True se `nome` è un file di livello singolo (niente separatori/`..`)."""
+    """True se `nome` è un file di livello singolo (niente separatori di path,
+
+    né i componenti speciali ``.``/``..``; ``..`` interno al nome è ammesso)."""
     return bool(
         nome
         and isinstance(nome, str)
         and Path(nome).name == nome
-        and ".." not in nome
+        and nome not in (".", "..")
+        and "/" not in nome
+        and "\\" not in nome
     )
 
 
@@ -152,6 +156,16 @@ def _scrivi_state(ultimi: list) -> None:
 def _estraai_tutti(cfg: dict) -> list[dict]:
     estratti = []
     for a in cfg.get("argomenti", []):
+        if not isinstance(a, dict):
+            estratti.append(
+                {
+                    "sorgente": None,
+                    "etichetta": None,
+                    "valori": [],
+                    "errore": "voce di configurazione non valida",
+                }
+            )
+            continue
         if not _nome_valido(a.get("sorgente")):
             a_ = dict(a)
             a_["valori"] = []
@@ -171,6 +185,9 @@ def _estraai_tutti(cfg: dict) -> list[dict]:
         except (TypeError, ValueError, KeyError):
             a_["valori"] = []
             a_["errore"] = "riga_etichetta non valida"
+        except Exception:  # noqa: BLE001  (xlsx corrotto/illeggibile)
+            a_["valori"] = []
+            a_["errore"] = "sorgente non leggibile"
         estratti.append(a_)
     return estratti
 
@@ -338,6 +355,8 @@ def api_aggiungi():
         riga_n = int(riga)
     except (TypeError, ValueError):
         return jsonify({"errore": f"Riga non valida: {riga}"}), 400
+    if isinstance(riga, float) and riga != riga_n:
+        return jsonify({"errore": f"Riga non valida: {riga}"}), 400
     if riga_n < 1:
         return jsonify({"errore": "Riga non valida"}), 400
     path = _risolvi_in(SOURCE_DIR, sorgente)
@@ -421,6 +440,8 @@ def api_modella():
 @app.post("/api/compila")
 def api_compila():
     cfg = _leggi_config()
+    if not cfg.get("argomenti"):
+        return jsonify({"errore": "Nessun argomento configurato"}), 400
     estratti = _estraai_tutti(cfg)
     esiti = _compila_tutti(cfg, estratti)
     if not esiti.get("completa"):
@@ -460,7 +481,8 @@ def api_export():
             suffisso = 2
             while f"{nome_foglio}_{suffisso}".lower() in usati:
                 suffisso += 1
-            nome_foglio = f"{nome_foglio}_{suffisso}"
+            base = nome_foglio[: max(0, 31 - len(str(suffisso)) - 1)]
+            nome_foglio = f"{base}_{suffisso}"
         usati.add(nome_foglio.lower())
         ws = wb.create_sheet(title=nome_foglio)
         ws["A1"] = "ARGOMENTO"

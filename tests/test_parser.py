@@ -92,6 +92,48 @@ def test_trova_cella_etichetta_case_sensitive_e_duplicati(tmp_path):
     assert trova_cella_etichetta(p, "Co2") is None
 
 
+def test_trova_cella_etichetta_ignora_titoli(tmp_path):
+    """A1: come trova_argomenti, la ricerca nella scheda scarta i TITOLI:
+    font > 11.5 o cella sottostante in grassetto (un argomento vero ha valori
+    sotto). Prima compilava sotto un header grande al posto dell'argomento."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "titoli.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B2"] = "VELOCITA'"
+    ws["B2"].font = Font(bold=True, size=16)   # titolo grande
+    ws["B3"] = 999
+    ws["B6"] = "VELOCITA'"
+    ws["B6"].font = Font(bold=True)            # vero argomento
+    ws["B7"] = 1
+    ws["B10"] = "X"                            # grassetto sopra un altro grassetto
+    ws["B10"].font = Font(bold=True)
+    ws["B11"] = "Y"
+    ws["B11"].font = Font(bold=True)
+    wb.save(p)
+    wb.close()
+
+    assert trova_cella_etichetta(p, "VELOCITA'") == (6, 2)   # non (2, 2)
+    assert trova_cella_etichetta(p, "X") is None             # sotto Y in grassetto
+    assert trova_cella_etichetta(p, "Y") == (11, 2)
+
+
+def test_colonna_a_numero_rifiuta_zero_e_negativi():
+    """A2: le colonne iniziano da 1; 0 e negativi non sono mai validi."""
+    with pytest.raises(ValueError):
+        colonna_a_numero(0)
+    with pytest.raises(ValueError):
+        colonna_a_numero(-3)
+    with pytest.raises(ValueError):
+        colonna_a_numero("0")
+
+
+def test_colonna_a_numero_booleani_accettati():
+    assert colonna_a_numero(True) == 1  # True == 1 (parentesi: comportamento attuale)
+
+
 def test_crea_voce_rifiuta_cella_unita(tmp_path):
     """A3: `crea_voce` rifiuta con ValueError una cella dentro un merge
     (sia anchor che MergedCell) invece di scrivere a metà dell'unione."""

@@ -4,7 +4,7 @@
 Strumento che monitora dozzine di file Excel sorgente, estrae "argomenti" (etichette in grassetto con valori sotto) e compila un unico file Excel di destinazione ("scheda") in posizioni specifiche. Ruolo principale: rilevare modifiche ai file, prelevare valori selezionati e immetterli nella scheda da compilare. Futuro: automazione con n8n self-hosted e notifiche email.
 
 ## 📍 Stato corrente
-App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep elemento-per-elemento del 25/9 completato (parser, API, UI, infra): **63 test verdi** + smoke E2E 25/25 + build Docker verificata. Server live su **8010 riavviato col codice nuovo** (fix QA + sweep). n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **committare il bug sweep**, **attivare n8n**.
+App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep elemento-per-elemento del 25/9 completato (set 25 + set 25-bis: parser, API, UI, infra): **73 test verdi** + smoke E2E 25/25 + build Docker verificata. Server live su **8010** gira col codice del set 25 (i fix 25-bis non ancora deployati/riavviati: A1-A2, B1-B7, C1 sono nel repo, attendono commit). n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **committare i due set**, **riavviare il server**, **attivare n8n**.
 
 ## 🗂 Struttura progetto
 Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata da "Progetto ExEL")
@@ -108,8 +108,29 @@ Sweep in sola lettura su copia isolata `/tmp/overlord-sweep` (metodologia approv
 - Build Docker di `Dockerfile.selettore` eseguita e container avviato su porta di test 8098 (serve su `/`, `/files` montato, `/app` senza `.venv`); immagine di test rimossa.
 - Server live su **8010 riavviato col codice nuovo** (PID rinnovato): root→200, rotta inesistente→404, GET su compila→405, payload non-dict→400, compila senza destinazione→400.
 
+## ✅ Correzioni applicate (bug sweep elemento-per-elemento, set 25-bis)
+
+Sweep di completamento dopo il set 25 (approvato dall'utente: "Sì, tutti A1-A2, B1-B7, C1"). Tutte le anomalie riprodotte su copia isolata PRIMA del fix, poi corrette con test dedicati.
+
+- **A1** (`parser.trova_cella_etichetta`): ora scarta i TITOLI come `trova_argomenti` (font > 11.5 oppure cella sottostante in grassetto) → prima matchava un header grande e compilava sotto al titolo.
+- **A2** (`parser.colonna_a_numero`): colonne 0/negative ora danno `ValueError`.
+- **B1** (`app._estraai_tutti`): config `argomenti` come dict / lista di stringhe → niente 500, errore per-voce "voce di configurazione non valida".
+- **B2** (avvio `app.py`): ora crea anche `config/` e `state/` (prima solo source/dest/export → primo aggiungi = 500 su deployment fresco).
+- **B3** (`ap_estraai_tutti`): sorgente xlsx corrotto/illeggibile (es. non-zip) → errore per-voce "sorgente non leggibile" su compila; elabora → `ok:false` con motivo.
+- **B4** (`/api/aggiungi`): `riga_etichetta` frazionaria (3.5) → 400; float intero (3.0) resta accettato.
+- **B5** (`/api/compila`): zero argomenti configurati → 400 "Nessun argomento configurato".
+- **B6** (`/api/export`): suffisso di dedup dei fogli duplicati contenuto in 31 char (base troncata prima di `_N`), niente più nomi >31.
+- **B7** (`app._nome_valido`): `..` interno al nome (es. `rel..dati.xlsx`) ora accettato e selezionabile; traversal reale (separatori/`.`, `..`, root) ancora bloccato (test 404 di conferma).
+- **C1** (`index.html`): fetch di `carica`/`aggiornaConfig`/`caricaArgomenti`/`caricaVoci`/`mostraAnteprimaCorrente` ora passano da `richiesta()` con gestione errori (niente `voci.length` su null / elaborazioni mute); `rimuoviArgomento` protetto da indice fuori range.
+
+**Verifiche**
+- Riproduzioni pre-fix su `/tmp/overlord-sweep2` (FR2/B1, FR4/B2, FR7/B3, FR9/A1, FR10/A2, allineamenti B4/B5/B6/B7).
+- Suite pytest: **73 test verdi** (10 in più).
+- Smoke E2E su `/tmp/overlord-smoke` (porta 8099, codice aggiornato): **25/25**.
+- Token di rete extra: `node --check` sul blocco `<script>` di `index.html` OK.
+
 ## 📌 Prossimi passi
-1. **Committare il bug sweep** (set 25, modifiche non ancora committate; su conferma dell'utente).
+1. **Committare bug sweep set 25 + 25-bis** (modifiche di QA + parser/API/UI/infra non ancora committate; su conferma dell'utente) ed eventuale push su `Tox-oss/Progetto-Overlord`.
 2. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5 — ora applicata anche ai sorgenti). Aggiungere test a `tests/` per eventuali nuove regole emerse.
 3. Attivare n8n (`docker compose --profile auto up -d`) e agganciare `/api/elabora` come bridge di automazione.
 4. (Futuro) Integrare notifiche email.

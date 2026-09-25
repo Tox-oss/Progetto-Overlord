@@ -599,3 +599,111 @@ def test_modella_pulisce_spazi_testo(app2, client2):
     wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
     assert wb.active["B40"].value == "NOTA"
     wb.close()
+
+
+def test_avvio_crea_dir_config_state():
+    """B2: all'avvio il modulo crea anche config/ e state/, non solo source/dest/export."""
+    import app as appmod
+
+    assert appmod.CONFIG_PATH.parent.exists()
+    assert appmod.STATE_PATH.parent.exists()
+
+
+def test_config_argomenti_non_lista_errore_per_voce(app2, client2):
+    """B1: argomenti come dict o lista di stringhe non deve far esplodere la
+    compilazione: ogni voce non valida produce un errore per-voce."""
+    for config in (
+        {"destinazione": "scheda.xlsx", "argomenti": {"a": "b"}},
+        {"destinazione": "scheda.xlsx", "argomenti": ["mario", "luigi"]},
+    ):
+        app2.CONFIG_PATH.write_text(json.dumps(config))
+        r = client2.post("/api/compila")
+        assert r.status_code == 400
+        assert any(
+            e.get("errore") == "voce di configurazione non valida"
+            for e in r.get_json()["esiti"]
+        )
+
+
+def test_sorgente_corrotto_errore_per_voce(app2, client2):
+    """B3: un sorgente xlsx corrotto/illeggibile non fa cadere compila/elabora,
+    ma produce un errore per-voce (e ok:false su elabora)."""
+    (app2.SOURCE_DIR / "rotto.xlsx").write_bytes(b"non-e-un-zip-valido")
+    app2.CONFIG_PATH.write_text(json.dumps({
+        "destinazione": "scheda.xlsx",
+        "argomenti": [{
+            "sorgente": "rotto.xlsx", "etichetta": "ROTTA", "riga_etichetta": 1,
+        }],
+    }))
+    r = client2.post("/api/compila")
+    assert r.status_code == 400
+    assert r.get_json()["esiti"][0]["errore"] == "sorgente non leggibile"
+
+    re = client2.post("/api/elabora")
+    assert re.status_code == 200
+    assert re.get_json()["ok"] is False
+
+
+def test_aggiungi_riga_frazionaria_400(client):
+    """B4: una riga_etichetta frazionaria (3.5) è rifiutata; un float intero
+    equivalente a un int (3.0) resta accettato."""
+    r = client.post("/api/aggiungi", json={
+        "sorgente": "imp.xlsx", "etichetta": "VELOCITA'", "riga_etichetta": 3.5,
+    })
+    assert r.status_code == 400
+
+    r2 = client.post("/api/aggiungi", json={
+        "sorgente": "imp.xlsx", "etichetta": "VELOCITA'", "riga_etichetta": 3.0,
+    })
+    assert r2.status_code == 200
+
+
+def test_compila_senza_argomenti_400(client):
+    """B5: compila con zero argomenti configurati risponde 400, coerente con
+    elabora (che darebbe ok:false)."""
+    assert client.post("/api/compila").status_code == 400
+    assert client.post("/api/compila").get_json()["errore"] == "Nessun argomento configurato"
+
+
+def test_export_dedup_nome_foglio_max_31(app2, client2):
+    """B6: il suffisso di disambiguazione dei fogli duplicati non deve allungare
+    il nome oltre 31 caratteri (openpyxl emette solo un warning, ma Excel
+    può rifiutare il file)."""
+    l31 = "T" * 31
+    app2.CONFIG_PATH.write_text(json.dumps({
+        "destinazione": "scheda.xlsx",
+        "argomenti": [
+            {"sorgente": "a.xlsx", "etichetta": l31, "riga_etichetta": 1},
+            {"sorgente": "data.xlsx", "etichetta": l31 + "'", "riga_etichetta": 1},
+        ],
+    }))
+    r = client2.post("/api/export", json={"nome": "lungo.xlsx"})
+    assert r.status_code == 200
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(app2.EXPORT_DIR / "lungo.xlsx")
+    assert max(len(ws.title) for ws in wb.worksheets) <= 31
+    assert wb.worksheets[1].title == ("T" * 29) + "_2"
+    wb.close()
+
+
+def test_nome_file_con_doppi_punti_selezionabile(app, client):
+    """B7: un file tipo ``rel..dati.xlsx`` (più punti interni) è elencato in UI
+    e deve essere selezionabile, senza aprire buchi nel traversal check."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "VELOCITA'"
+    ws["A1"].font = Font(bold=True)
+    ws["A2"] = 7
+    wb.save(app.SOURCE_DIR / "rel..dati.xlsx")
+    wb.close()
+
+    r = client.get("/api/argomenti?file=rel..dati.xlsx")
+    assert r.status_code == 200
+    assert r.get_json()[0]["valori"] == [7]
+
+    assert client.get("/api/argomenti?file=../scheda.xlsx").status_code == 404

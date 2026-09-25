@@ -141,16 +141,24 @@ def estrai_colonna(path: Path, riga_etichetta: int, colonna: int = 1) -> list:
 
 
 def trova_cella_etichetta(path: Path, testo: str):
-    """Posizione (riga, colonna) del grassetto col testo dato, o None."""
+    """Posizione (riga, colonna) del grassetto col testo dato, o None.
+
+    Come `trova_argomenti`, scarta i titoli: font > 11.5 o cella sottostante
+    in grassetto (un argomento vero ha valori sotto, non un'altra etichetta).
+    """
     wb = carica_workbook(path)
     ws = wb.active
     for row in ws.iter_rows():
         for cell in row:
-            if (
-                cell.value is not None
-                and _cell_is_bold(cell)
-                and str(cell.value).strip() == str(testo).strip()
-            ):
+            if cell.value is None or not _cell_is_bold(cell):
+                continue
+            sz = cell.font.size if cell.font else None
+            if sz is not None and sz > 11.5:
+                continue
+            sotto = ws.cell(row=cell.row + 1, column=cell.column)
+            if sotto.value is not None and _cell_is_bold(sotto):
+                continue
+            if str(cell.value).strip() == str(testo).strip():
                 wb.close()
                 return cell.row, cell.column
     wb.close()
@@ -241,8 +249,10 @@ def crea_voce(path: Path, testo: str, riga: int, colonna: int) -> None:
 
 
 def colonna_a_numero(colonna) -> int:
-    """Accetta 'B' o 2 e restituisce un numero di colonna."""
+    """Accetta 'B' o 2 e restituisce un numero di colonna (1-based)."""
     if isinstance(colonna, int):
+        if colonna < 1:
+            raise ValueError(f"Colonna non valida: {colonna}")
         return colonna
     testo = str(colonna).strip().upper()
     if not testo:
