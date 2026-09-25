@@ -169,6 +169,12 @@ def _spazio_libero(ws, riga: int, colonna: int, soglia: int | None = None) -> in
     """Celle successive alla riga dati che NON possono essere sovrascritte:
     si contano finché non si incontra una cella grassetto (etichetta) o unita.
 
+    Nota: le due righe vuote consecutive sono la regola che delimita i blocchi
+    dei SORGENTI (lettura). Qui, sul DEST, lo spazio scrivibile cresce fino
+    all'ostacolo (grassetto/cella unita) anche oltre le vuote: riscriverle
+    dentro il blocco è sicuro perché il foglio destinazione non viene mai
+    ri-letto a blocchi (le voci vi si trovano per etichetta).
+
     Se `soglia` è data, la conta si ferma appena la raggiunge: sapere che c'è
     abbastanza spazio basta. Se nessun ostacolo delimita il blocco, lo spazio
     è illimitato (Excel crea celle al volo): la conta non guarda max_row.
@@ -220,8 +226,8 @@ def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
             break
         cell.value = v
         scritti += 1
-    wb.close()
     wb.save(path)
+    wb.close()
     return scritti
 
 
@@ -244,8 +250,8 @@ def crea_voce(path: Path, testo: str, riga: int, colonna: int) -> None:
         raise ValueError("Cella dentro un intervallo unito: scegliere un'altra posizione")
     cell = ws.cell(row=riga, column=colonna, value=testo_pulito)
     cell.font = Font(bold=True)
-    wb.close()
     wb.save(path)
+    wb.close()
 
 
 def colonna_a_numero(colonna) -> int:

@@ -66,7 +66,7 @@ def _risolvi_in(cartella: Path, nome) -> Path | None:
 def _errore_http(exc):
     """Gli errori HTTP (404/405/400…) restituiscono JSON col loro codice.
 
-    Senza questo handler Flasck farebbe gestire l'eccezione da
+    Senza questo handler Flask farebbe gestire l'eccezione da
     `_errore_generico(Exception)`, convertendo ogni 404/405/JSON malformato
     in un 500 generico."""
     return jsonify({"errore": exc.description or exc.name}), exc.code or 500

@@ -434,3 +434,42 @@ def test_spazio_libero_limita_davanti_a_bold(scheda_stessa_colonna):
     ws = wb.active
     assert _spazio_libero(ws, 3, 2) == 3  # B4,B5,B6 (fermo a B7 bold)
     wb.close()
+
+
+def test_spazio_libero_oltre_due_vuote_davanti_a_bold(tmp_path):
+    """BUG 5 (set 26): sul DEST le due righe vuote consecutive NON riducono lo
+    spazio scrivibile: il blocco cresce fino al grassetto/ostacolo. Le due
+    righe vuote sono il delimitatore dei SORGENTI (regola di lettura), il DEST
+    non viene mai ri-letto a blocchi (le voci si trovano per etichetta)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "duevuote_bold.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B3"] = "VELOCITA'"
+    ws["B3"].font = Font(bold=True)
+    ws["B4"] = 100
+    ws["B5"], ws["B6"] = None, None   # due righe vuote = delimitatore nei SORGENTI
+    ws["B7"] = "PRESSIONE"
+    ws["B7"].font = Font(bold=True)
+    wb.save(p)
+    wb.close()
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(p)
+    ws = wb.active
+    # B4 (valore), B5, B6 (vuote): tutte scrivibili, il conteggio si ferma a B7
+    assert _spazio_libero(ws, 3, 2) == 3
+    wb.close()
+
+    scritti = scrivi_sotto(p, 3, 2, [10, 20, 30])
+    assert scritti == 3  # riempie anche le due vuote, fermandosi davanti a B7
+
+    wb = load_workbook(p)
+    ws = wb.active
+    assert [ws["B4"].value, ws["B5"].value, ws["B6"].value] == [10, 20, 30]
+    assert ws["B7"].value == "PRESSIONE"   # l'etichetta sotto non viene toccata
+    assert ws["B3"].value == "VELOCITA'"
+    wb.close()

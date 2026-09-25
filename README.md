@@ -77,6 +77,7 @@ Resetta anche `files/config/selezione.json` (`destinazione`/`argomenti`) e `file
 - **Celle unite**: una cella dentro un intervallo unito non può essere scritta (errore "cella unita") né può ospitare l'etichetta di un argomento.
 - **Nomi foglio**: limitati a 31 caratteri (limite Excel); gli apostrofi ai bordi vengono rimossi.
 - **`selezione.json`**: se `riga_etichetta` manca o non è un numero (config modificata a mano), l'argomento viene segnalato con errore per-voce e la compilazione si ferma.
+- **Blocchi in scheda**: il "2 righe vuote = fine blocco" è la regola di lettura dei **sorgenti**; sulla scheda destinazione lo spazio scrivibile sotto un'etichetta cresce fino alla prossima etichetta in grassetto / cella unita (le voci si trovano per etichetta, non a blocchi).
 
 ## Prossimi passi
 

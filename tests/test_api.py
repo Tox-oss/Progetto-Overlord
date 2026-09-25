@@ -465,7 +465,7 @@ def test_export_dedup_etichette_distinte_collidono(app2, client2):
     wb.close()
 
 
-def test_compila_ersenza_destinazione_400(app2, client2):
+def test_compila_senza_destinazione_400(app2, client2):
     """Finding 11 (server): compila senza scheda risponde 400 con errore."""
     client2.post("/api/aggiungi", json={
         "sorgente": "a.xlsx", "etichetta": "ALFA", "riga_etichetta": 1,
@@ -616,7 +616,9 @@ def test_config_argomenti_non_lista_errore_per_voce(app2, client2):
         {"destinazione": "scheda.xlsx", "argomenti": {"a": "b"}},
         {"destinazione": "scheda.xlsx", "argomenti": ["mario", "luigi"]},
     ):
-        app2.CONFIG_PATH.write_text(json.dumps(config))
+        app2.CONFIG_PATH.write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
         r = client2.post("/api/compila")
         assert r.status_code == 400
         assert any(
@@ -629,12 +631,15 @@ def test_sorgente_corrotto_errore_per_voce(app2, client2):
     """B3: un sorgente xlsx corrotto/illeggibile non fa cadere compila/elabora,
     ma produce un errore per-voce (e ok:false su elabora)."""
     (app2.SOURCE_DIR / "rotto.xlsx").write_bytes(b"non-e-un-zip-valido")
-    app2.CONFIG_PATH.write_text(json.dumps({
-        "destinazione": "scheda.xlsx",
-        "argomenti": [{
-            "sorgente": "rotto.xlsx", "etichetta": "ROTTA", "riga_etichetta": 1,
-        }],
-    }))
+    app2.CONFIG_PATH.write_text(
+        json.dumps({
+            "destinazione": "scheda.xlsx",
+            "argomenti": [{
+                "sorgente": "rotto.xlsx", "etichetta": "ROTTA", "riga_etichetta": 1,
+            }],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
     r = client2.post("/api/compila")
     assert r.status_code == 400
     assert r.get_json()["esiti"][0]["errore"] == "sorgente non leggibile"
@@ -670,13 +675,16 @@ def test_export_dedup_nome_foglio_max_31(app2, client2):
     il nome oltre 31 caratteri (openpyxl emette solo un warning, ma Excel
     può rifiutare il file)."""
     l31 = "T" * 31
-    app2.CONFIG_PATH.write_text(json.dumps({
-        "destinazione": "scheda.xlsx",
-        "argomenti": [
-            {"sorgente": "a.xlsx", "etichetta": l31, "riga_etichetta": 1},
-            {"sorgente": "data.xlsx", "etichetta": l31 + "'", "riga_etichetta": 1},
-        ],
-    }))
+    app2.CONFIG_PATH.write_text(
+        json.dumps({
+            "destinazione": "scheda.xlsx",
+            "argomenti": [
+                {"sorgente": "a.xlsx", "etichetta": l31, "riga_etichetta": 1},
+                {"sorgente": "data.xlsx", "etichetta": l31 + "'", "riga_etichetta": 1},
+            ],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
     r = client2.post("/api/export", json={"nome": "lungo.xlsx"})
     assert r.status_code == 200
 
@@ -707,3 +715,24 @@ def test_nome_file_con_doppi_punti_selezionabile(app, client):
     assert r.get_json()[0]["valori"] == [7]
 
     assert client.get("/api/argomenti?file=../scheda.xlsx").status_code == 404
+
+
+def test_config_utf8_roundtrip(app2, client2):
+    """BUG 6: la config con etichette accentate si salva e si rilegge identica
+    (ensure_ascii=False + encoding utf-8, come fa l'app)."""
+    config = {
+        "destinazione": "scheda.xlsx",
+        "argomenti": [{
+            "sorgente": "a.xlsx", "etichetta": "TIPOLOGÌA ÀCCENTO", "riga_etichetta": 1,
+        }],
+    }
+    app2.CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False), encoding="utf-8"
+    )
+    letto = json.loads(app2.CONFIG_PATH.read_text(encoding="utf-8"))
+    assert letto == config
+    assert letto["argomenti"][0]["etichetta"] == "TIPOLOGÌA ÀCCENTO"
+
+    r = client2.get("/api/config")
+    assert r.status_code == 200
+    assert r.get_json()["argomenti"][0]["etichetta"] == "TIPOLOGÌA ÀCCENTO"

@@ -4,7 +4,7 @@
 Strumento che monitora dozzine di file Excel sorgente, estrae "argomenti" (etichette in grassetto con valori sotto) e compila un unico file Excel di destinazione ("scheda") in posizioni specifiche. Ruolo principale: rilevare modifiche ai file, prelevare valori selezionati e immetterli nella scheda da compilare. Futuro: automazione con n8n self-hosted e notifiche email.
 
 ## 📍 Stato corrente
-App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep elemento-per-elemento del 25/9 completato (set 25 + set 25-bis: parser, API, UI, infra): **73 test verdi** + smoke E2E 25/25 + build Docker verificata. Server live su **8010** gira col codice del set 25 (i fix 25-bis non ancora deployati/riavviati: A1-A2, B1-B7, C1 sono nel repo, attendono commit). n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **committare i due set**, **riavviare il server**, **attivare n8n**.
+App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep elemento-per-elemento del 25/9 completato (set 25 + 25-bis: parser, API, UI, infra; set 26: hygiene parser/test): **75 test verdi** + smoke E2E 25/25 + build Docker verificata. Server live su **8010** gira col codice del set 25 (fix 25-bis/26 nel repo, attendono commit). n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **committare i tre set**, **riavviare il server**, **attivare n8n**.
 
 ## 🗂 Struttura progetto
 Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata da "Progetto ExEL")
@@ -128,6 +128,20 @@ Sweep di completamento dopo il set 25 (approvato dall'utente: "Sì, tutti A1-A2,
 - Suite pytest: **73 test verdi** (10 in più).
 - Smoke E2E su `/tmp/overlord-smoke` (porta 8099, codice aggiornato): **25/25**.
 - Token di rete extra: `node --check` sul blocco `<script>` di `index.html` OK.
+
+## ✅ Correzioni applicate (bug sweep, set 26 — hygiene parser/test)
+
+Report esterno analizzato punto-per-punto; NAD (nessuna anomalia) per il "BUG 5" dopo verifica sul codice.
+
+- **BUG 1/2** (`parser.py`): `wb.close()` prima di `wb.save()` in `scrivi_sotto` e `crea_voce` → ordine invertito. Swappati a `save()→close()`. Funzionava per caso (openpyxl non distrugge i dati in memoria): fix formale/robustezza. Unica occorrenza nel repo.
+- **BUG 3** (`app.py`): docstring "Flasck" → "Flask".
+- **BUG 4** (`test_api.py`): rinomina `test_compila_ersenza_destinazione_400` → `test_compila_senza_destinazione_400`.
+- **BUG 6** (`test_api.py`): 3× `write_text(json.dumps(...))` senza encoding → `ensure_ascii=False` + `encoding="utf-8"` (come fa l'app); nuovo test round-trip config UTF-8 accentata (salvataggio + `/api/config`).
+- **BUG 5 — analizzato, dichiarato comportamento corretto (NAD)**: il report sosteneva che `_spazio_libero` "sovrastima" lo spazio perché non si ferma alle 2 righe vuote e che `scrivi_sotto` scriverebbe solo 1 valore. Verifica sul codice: (1) `_spazio_libero` e il write-loop di `scrivi_sotto` si fermano agli STESSI ostacoli (grassetto/merge) → nessuna sovrastima rispetto alla capacità reale; (2) la regola "2 vuote = fine blocco" governa i SORGENTI (`estrai_colonna`), il DEST non viene mai ri-letto a blocchi (le voci si trovano per etichetta con `trova_cella_etichetta`) → il rischio di "merging dei blocchi" non è raggiungibile; (3) applicare le 2 vuote al DEST regredirebbe la crescita in colonne vuote. Scelta utente: **Proposta A — documentare e pinnare**. Aggiornata docstring di `_spazio_libero` (DEST fino all'ostacolo; 2 vuote = regola sorgenti) + nuovo test `test_spazio_libero_oltre_due_vuote_davanti_a_bold`.
+
+**Verifiche**
+- Suite pytest: **75 test verdi** (73 + 2 nuovi: round-trip UTF-8 e pin BUG 5).
+- Smoke E2E su `/tmp/overlord-smoke` (porta 8099): **25/25**.
 
 ## 📌 Prossimi passi
 1. **Committare bug sweep set 25 + 25-bis** (modifiche di QA + parser/API/UI/infra non ancora committate; su conferma dell'utente) ed eventuale push su `Tox-oss/Progetto-Overlord`.
