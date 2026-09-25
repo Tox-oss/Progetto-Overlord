@@ -13,6 +13,11 @@ services:
     volumes:
       - ../files:/files
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   n8n:
     profiles: ["auto"]

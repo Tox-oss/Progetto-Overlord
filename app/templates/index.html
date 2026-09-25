@@ -148,6 +148,27 @@
     const selDest = $("selDest");
     const selScheda = $("selScheda");
 
+    let occupato = false;
+    function conGuardia(fn) {
+      return async (...argomenti) => {
+        if (occupato) return;
+        occupato = true;
+        try {
+          return await fn(...argomenti);
+        } finally {
+          occupato = false;
+        }
+      };
+    }
+    async function richiesta(url, opts) {
+      try {
+        return await fetch(url, opts);
+      } catch (e) {
+        esitoErr("Errore di rete: impossibile contattare il server.");
+        throw e;
+      }
+    }
+
     function esc(v) {
       return String(v ?? "").replace(/[&<>"']/g, (c) => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -235,18 +256,29 @@
       fillSelect(selDest, dest, "— scegli la scheda finale —");
       fillSelect(selScheda, dest, "— scegli una scheda —");
       await aggiornaConfig();
+      await caricaVoci();
     }
     async function caricaArgomenti(nome, etichettaScelta) {
       const res = await fetch("/api/argomenti?file=" + encodeURIComponent(nome));
       if (!res.ok) return;
       const args = await res.json();
-      fillSelect(selArgomento, args.map(a => a.etichetta + " (riga " + a.riga + ")"),
-        "— scegli l'argomento —");
+      selArgomento.innerHTML = "";
+      const ph = document.createElement("option");
+      ph.value = "";
+      ph.textContent = "— scegli l'argomento —";
+      selArgomento.appendChild(ph);
+      for (const a of args) {
+        const opt = document.createElement("option");
+        opt.value = a.etichetta;
+        opt.dataset.riga = a.riga;
+        opt.textContent = a.etichetta + " (riga " + a.riga + ")";
+        selArgomento.appendChild(opt);
+      }
       selArgomento.disabled = false;
       $("btnAggiungi").disabled = !selArgomento.value;
       if (etichettaScelta) {
         for (const opt of selArgomento.options) {
-          if (opt.textContent.startsWith(etichettaScelta + " ")) {
+          if (opt.value === etichettaScelta) {
             selArgomento.value = opt.value;
             break;
           }
@@ -255,11 +287,10 @@
     }
     function argomentoScelto() {
       const nome = selSorgente.value;
-      const testo = selArgomento.value;
-      if (!nome || !testo) return null;
-      const riga = parseInt((testo.match(/riga (\d+)/) || [null, null])[1]);
-      const etichetta = testo.replace(/\s*\(riga \d+\)/, "");
-      return { sorgente: nome, etichetta, riga_etichetta: riga };
+      const opt = selArgomento.selectedOptions[0];
+      if (!nome || !opt || !opt.value) return null;
+      const riga = parseInt(opt.dataset.riga, 10);
+      return { sorgente: nome, etichetta: opt.value, riga_etichetta: riga };
     }
     async function mostraAnteprimaCorrente() {
       const a = argomentoScelto();
@@ -293,44 +324,43 @@
     });
     selArgomento.addEventListener("change", mostraAnteprimaCorrente);
 
-    $("btnAggiungi").addEventListener("click", async () => {
+    $("btnAggiungi").addEventListener("click", conGuardia(async () => {
       const a = argomentoScelto();
       if (!a) return esitoErr("Seleziona file sorgente e argomento.");
-      const cfg = await fetch("/api/aggiungi", {
+      const cfg = await richiesta("/api/aggiungi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(a),
       }).then(r => r.json());
       statoConfig(cfg);
       esitoOk("Argomento aggiunto: " + a.etichetta + " da " + a.sorgente);
-    });
+    }));
 
-    window.rimuoviArgomento = async (indice) => {
-      const cfg = await fetch("/api/config").then(r => r.json());
-      const a = cfg.argomenti[indice];
-      const nuova = await fetch("/api/rimuovi", {
+    window.rimuoviArgomento = conGuardia(async (indice) => {
+      const a = (await richiesta("/api/config").then(r => r.json())).argomenti[indice];
+      const nuova = await richiesta("/api/rimuovi", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sorgente: a.sorgente, etichetta: a.etichetta }),
       }).then(r => r.json());
       statoConfig(nuova);
       esitoOk("Rimosso: " + a.etichetta);
-    };
+    });
 
-    selDest.addEventListener("change", async () => {
+    selDest.addEventListener("change", conGuardia(async () => {
       if (selDest.value) {
-        await fetch("/api/destinazione", {
+        await richiesta("/api/destinazione", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ destinazione: selDest.value }),
         });
       }
-      const cfg = await fetch("/api/config").then(r => r.json());
+      const cfg = await richiesta("/api/config").then(r => r.json());
       aggiornaBottoni(cfg);
-    });
+    }));
 
-    $("btnCompila").addEventListener("click", async () => {
-      const res = await fetch("/api/compila", { method: "POST" });
+    $("btnCompila").addEventListener("click", conGuardia(async () => {
+      const res = await richiesta("/api/compila", { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         const problemi = (data.esiti || [])
@@ -354,10 +384,10 @@
       esitoOk("Compilazione:\n" + righe);
       await caricaVoci();
       await aggiornaConfig();
-    });
+    }));
 
-    $("btnExport").addEventListener("click", async () => {
-      const res = await fetch("/api/export", {
+    $("btnExport").addEventListener("click", conGuardia(async () => {
+      const res = await richiesta("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nome: $("inpNome").value }),
@@ -366,10 +396,10 @@
       if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
       window.location.href = "/api/download/" + encodeURIComponent(data.file);
       esitoOk("Esportati " + data.argomenti + " argomenti in " + data.file);
-    });
+    }));
 
     selScheda.addEventListener("change", caricaVoci);
-    $("btnModella").addEventListener("click", async () => {
+    $("btnModella").addEventListener("click", conGuardia(async () => {
       const payload = {
         destinazione: selScheda.value,
         testo: $("inpTesto").value,
@@ -379,7 +409,7 @@
       if (!payload.destinazione || !payload.testo) {
         return esitoErr("Scegli scheda e testo della voce.");
       }
-      const res = await fetch("/api/modella", {
+      const res = await richiesta("/api/modella", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -388,7 +418,7 @@
       if (!res.ok) return esitoErr("Errore: " + (data.errore || "sconosciuto"));
       esitoOk("Voce creata: " + payload.testo + " in " + payload.colonna.toUpperCase() + payload.riga);
       await caricaVoci();
-    });
+    }));
 
     carica();
   </script>

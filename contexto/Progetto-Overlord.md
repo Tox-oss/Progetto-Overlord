@@ -4,7 +4,7 @@
 Strumento che monitora dozzine di file Excel sorgente, estrae "argomenti" (etichette in grassetto con valori sotto) e compila un unico file Excel di destinazione ("scheda") in posizioni specifiche. Ruolo principale: rilevare modifiche ai file, prelevare valori selezionati e immetterli nella scheda da compilare. Futuro: automazione con n8n self-hosted e notifiche email.
 
 ## 📍 Stato corrente
-App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep QA del 24/9 completato: **45 test verdi** + smoke E2E 14/14, server live su **8010** da riavviare per caricare i fix. n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **riavviare il server** e **attivare n8n**.
+App e API funzionanti e testate end-to-end (multi-sorgente → compila in posizioni giuste; dedup ok; modella scheda crea voci; export ok). Bug sweep elemento-per-elemento del 25/9 completato (parser, API, UI, infra): **63 test verdi** + smoke E2E 25/25 + build Docker verificata. Server live su **8010 riavviato col codice nuovo** (fix QA + sweep). n8n NON ancora attivato. Email non integrata. Prossimo passo (con l'utente): **validare la parser su file reali**, **committare il bug sweep**, **attivare n8n**.
 
 ## 🗂 Struttura progetto
 Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata da "Progetto ExEL")
@@ -32,7 +32,6 @@ Cartella: `/home/vitalianorossi/Scrivania/Lavori/Progetto Overlord/` (rinominata
 - [MEDIA] Euristiche parser (grassetto-titolo, font size > 11.5) testate sui mockup e applicate a sorgenti+scheda, ma NON ancora validate su file reali dell'utente — da verificare insieme.
 - [INFO] n8n non avviato; email non integrata (fonte: contesto utente).
 - [INFO] Config/state attualmente vuoti o parziali (residuo di test): destinazione null, un solo argomento (CO2), state resettato. Da ripristinare/popolare prima dell'uso reale.
-- [INFO] Server live su 8010 da riavviare per caricare i fix del bug sweep (restart non ancora concordato con l'utente).
 - [INFO] Nota formule: in `estrai_colonna` (data_only) le formule senza valore in cache risultano vuote. Su file Excel reali restituisce il valore calcolato.
 
 ## ✅ Correzioni applicate (bughunt esteso, set 24)
@@ -67,10 +66,52 @@ Sweep in sola lettura (riproduzioni in `/tmp/overlord-qa`): 14 finding (3 Alta, 
 - **Smoke E2E live verificato** su copia in `/tmp/overlord-smoke` (porta 8099, mockup rigenerati): 14/14 check verdi — flusso aggiungi→destinazione→compila (scritti 3 in E22-E24), elabora "nessuna variazione", compila senza destinazione → 400, traversal negati, export ok, modella ok. Server a fine test terminato; mockup/config/state del progetto intatti.
 - ⚠️ Il server live su **8010** gira ancora col codice vecchio: serve un **restart** per caricare i fix del bug sweep (non ancora richiesto dall'utente).
 
+## ✅ Correzioni applicate (bug sweep elemento-per-elemento, set 25)
+Sweep in sola lettura su copia isolata `/tmp/overlord-sweep` (metodologia approvata: scope "tutto, inclusa infra"; multi-foglio "mantieni active ma testalo"; riproduzioni delle anomalie PRIMA di toccare il progetto; fix+test; commit solo su richiesta). Invarianti parser (1 vuota = buco, 2 vuote = fine blocco, scrittura sotto etichetta omonima) preservati e ricoperti da test.
+
+**Class A — parser.py (13 funzioni esaminate)**
+1. **A1 `colonna_a_numero`**: `""`/`"  "` restituivano 0 silenzioso → ora `ValueError` (posizione non valida). Test.
+2. **A2 `trova_cella_etichetta`**: riconfermato *case-sensitive*; etichette duplicate → prima occorrenza nel foglio. Test che fissa il comportamento.
+3. **A3 `crea_voce`**: ora valida riga/colonna ≥ 1, ripulisce il testo dagli spazi e **rifiuta con `ValueError` le celle dentro intervalli uniti** (anchor e `MergedCell`) — prima poteva scrivere "a metà" di un'unione. Test (anche via API: modella su cella unita → 400).
+4. **A4 `scrivi_sotto`/`_spazio_libero`**: un merge in colonna LATERALE non blocca più la colonna dell'etichetta (test); `_spazio_libero` accetta `soglia` (tetto di conta) e non guarda più `ws.max_row` (Excel crea celle al volo; un'etichetta sotto con `max_row` piccolo azzerava lo spazio).
+5. **A5 multi-foglio**: documento "LIMITE DOCUMENTATO" nel docstring — si legge/scrive solo il primo foglio attivo; test che fissa la lettura del solo primo foglio. Vincolo confermato dall'utente.
+6. **A6/A7/A8**: `estrai_colonna` oltre max_row → nessun crash ([]); booleani/Decimal/int conservati; `_spazio_libero` con soglia=0 e con due vuote consecutive. Test.
+
+**Class B — app.py (API, 13 rotte verificate)**
+7. **B1 handler errori**: `_errore_generico` (solo Exception) inghiottiva 404/405/400 trasformandoli in 500 → aggiunto `_errore_http` (kiwi `HTTPException`) che risponde JSON con status e `errore` corretti. Riprodotto pre-fix (5 casi → 500) e verificato post-fix (rotta inesistente→404, GET su rotta POST-only→405, JSON malformato→400).
+8. **B2 guardia `_payload_dict`** su `aggiungi`/`rimuovi`/`destinazione`/`modella`/`export`: payload non-dict (lista/stringa) → **400** invece di 500.
+9. **B3 config senza `riga_etichetta`** (modificata a mano): `_estraai_tutti` → errore per-voce "riga_etichetta non valida", compila → 400, niente 500. Test.
+10. **B4 export con argomento non estraibile** → **400** "Nessun argomento estraibile" + `esiti` (strategia tutto-o-niente coerente con compila). Test + E2E.
+11. **B5 `_nome_foglio_valido`**: apostrofi ai bordi rimossi ("VEL_OCITA'" → "VEL_OCITA"), max 31 char confermato; test dedup aggiornato.
+12. **B6 `/api/download`**: test di conferma — path url-encoded `..%2F...` → 404 (nessuna lettura fuori da `export/`).
+13. **B7 `api_elabora`**: niente più `str(exc)` (info-leak) → messaggio generico + `traceback.print_exc()` su console.
+14. **B8 tutto-o-niente non transazionale**: Documentato in README "Limiti noti" — la pre-validazione è trasversale (se un solo argomento è errato nulla si scrive); dopo la validazione le celle si scrivono una a una, quindi un'interruzione a metà ciclo può lasciare scritture parziali.
+15. **B9 `api_modella`**: testo ripulito dagli spazi (strip, coerente con `crea_voce`). Test + E2E.
+
+**Class C — index.html (UI)**
+16. **C1 `btnModella`**: disabilitato all'avvio (la `carica()` ora chiama `caricaVoci()`), non più "acceso" di default.
+17. **C2 `argomentoScelto`**: niente più regex fragile `/riga (\d+)/` sul testo della tendina; la riga viaggia in `data-riga` dell'`<option>` (un'etichetta con "riga" nel nome non rompe più la selezione).
+18. **C3 rete**: tutti i fetch interattivi passano da `richiesta()` (try/catch → "Errore di rete: impossibile contattare il server").
+19. **C4 doppio click**: guardia `conGuardia()` (un'azione alla volta su Aggiungi/Rimuovi/Compila/Export/Modella/Destinazione).
+20. **C5 `esc()`**: riconfermato sui flussi di errore 400. Validato con `node --check`.
+
+**Class D — infrastruttura**
+21. **`.dockerignore`** (nuovo): prima `COPY app/ /app/` copiava `app/.venv` (centinaia di MB) e l'intero albero (files/, tests/, contexto/, .git) nel build context → ora esclusi. Immagine risultante 252 MB con `/app` pulito (verificato montando il container).
+22. **`app/requirements.txt` pinnato**: `flask==3.1.3`, `openpyxl==3.1.5` (coincidono col venv).
+23. **`README.md`**: nuova sezione "Limiti noti" (solo primo foglio; scrittura non transazionale; dedup per intero; celle unite; nomi foglio 31 char + apostrofi; `riga_etichetta` mancante).
+24. **`n8n/docker-compose.yml`**: `healthcheck` aggiunto al servizio `selettore`.
+
+**Riproduzioni e verifiche**
+- Riproduzione pre-fix B1/B2 su copia `/tmp/overlord-sweep` (5 casi → 500), post-fix corretti.
+- Suite pytest: **63 test verdi** (18 in più del QA del 24/9).
+- Smoke E2E su `/tmp/overlord-smoke` (porta 8099): **25/25** (+11 controlli: 404/405/400, payload non-dict, body non-JSON, export con sorgente errata, download `..%2F`, modella su cella unita → 400, modella con strip testo).
+- Build Docker di `Dockerfile.selettore` eseguita e container avviato su porta di test 8098 (serve su `/`, `/files` montato, `/app` senza `.venv`); immagine di test rimossa.
+- Server live su **8010 riavviato col codice nuovo** (PID rinnovato): root→200, rotta inesistente→404, GET su compila→405, payload non-dict→400, compila senza destinazione→400.
+
 ## 📌 Prossimi passi
-1. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5 — ora applicata anche ai sorgenti). Aggiungere test a `tests/` per eventuali nuove regole emerse.
-2. Riavviare il server live su 8010 per caricare i fix del bug sweep (restart non ancora concordato).
+1. **Committare il bug sweep** (set 25, modifiche non ancora committate; su conferma dell'utente).
+2. Validare la parser su file Excel reali dell'utente (euristica titoli/grassetti: cella sotto in grassetto, font size > 11.5 — ora applicata anche ai sorgenti). Aggiungere test a `tests/` per eventuali nuove regole emerse.
 3. Attivare n8n (`docker compose --profile auto up -d`) e agganciare `/api/elabora` come bridge di automazione.
 4. (Futuro) Integrare notifiche email.
-5. Push del progetto su GitHub `Tox-oss/Progetto-Overlord` (branch main) con `.gitignore` per `.venv` e temporanei.
-6. Documentare nel README il comando di test: `app/.venv/bin/python -m pytest tests -q` (venv già esistente con pytest 9.1.1; `tests/conftest.py` genera mockup isolati in tmp_path).
+5. Push del progetto su GitHub `Tox-oss/Progetto-Overlord` (branch main) con `.gitignore` e `.dockerignore`.
+6. Documentare nel README il comando di test: `app/.venv/bin/python -m pytest tests -q` (venv già esistente; `tests/conftest.py` genera mockup isolati in tmp_path).

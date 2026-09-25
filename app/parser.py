@@ -10,6 +10,9 @@ Nel sorgente gli argomenti stanno in una colonna verticale (colonna 1).
 Nella scheda destinazione le etichette in grassetto possono stare in
 qualunque posizione del foglio; si compila trovando l'etichetta con lo
 stesso testo e scrivendo i valori nelle celle sotto di essa.
+
+LIMITE DOCUMENTATO: viene letto solo il primo foglio (`wb.active`).
+I file Excel con più fogli vengono usati come se avessero un solo foglio.
 """
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,10 +218,23 @@ def scrivi_sotto(path: Path, riga: int, colonna: int, valori: list) -> int:
 
 
 def crea_voce(path: Path, testo: str, riga: int, colonna: int) -> None:
-    """Crea (o aggiorna) una etichetta in grassetto vuota nella scheda."""
+    """Crea (o aggiorna) una etichetta in grassetto vuota nella scheda.
+
+    Rifiuta le celle interne a un intervallo unito (scrivere in una
+    `MergedCell` non attiva farebbe alzare AttributeError e corromperebbe
+    l'unione) e normalizza il testo senza spazi di bordo.
+    """
+    if riga < 1 or colonna < 1:
+        raise ValueError("Posizione non valida")
+    testo_pulito = str(testo).strip()
+    if not testo_pulito:
+        raise ValueError("Testo non valido")
     wb = carica_workbook(path)
     ws = wb.active
-    cell = ws.cell(row=riga, column=colonna, value=testo)
+    if _cella_in_unione(ws, riga, colonna):
+        wb.close()
+        raise ValueError("Cella dentro un intervallo unito: scegliere un'altra posizione")
+    cell = ws.cell(row=riga, column=colonna, value=testo_pulito)
     cell.font = Font(bold=True)
     wb.close()
     wb.save(path)
@@ -229,6 +245,8 @@ def colonna_a_numero(colonna) -> int:
     if isinstance(colonna, int):
         return colonna
     testo = str(colonna).strip().upper()
+    if not testo:
+        raise ValueError(f"Colonna non valida: {colonna}")
     n = 0
     for ch in testo:
         if not ("A" <= ch <= "Z"):

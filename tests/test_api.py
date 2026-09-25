@@ -459,8 +459,9 @@ def test_export_dedup_etichette_distinte_collidono(app2, client2):
     r = client2.post("/api/export", json={"nome": "out.xlsx"})
     assert r.status_code == 200
     wb = openpyxl.load_workbook(app2.EXPORT_DIR / "out.xlsx")
-    assert wb.sheetnames[0] == "VEL_OCITA'"
-    assert wb.sheetnames[1] == "VEL_OCITA'_2"
+    # l'apostrofo ai bordi viene tolto (regola Excel): entrambe -> VEL_OCITA, dedup
+    assert wb.sheetnames[0] == "VEL_OCITA"
+    assert wb.sheetnames[1] == "VEL_OCITA_2"
     wb.close()
 
 
@@ -499,4 +500,102 @@ def test_elabora_incompleta_non_salva_stato_e_non_svuota(app2, client2):
     # la scheda NON e' stata toccata: il vecchio valore in B3 resta
     wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
     assert wb.active["B3"].value == prima
+    wb.close()
+
+
+def test_rotta_inesistente_404_non_500(client):
+    """Bug sweep B1: una rotta inesistente deve restituire 404, non 500."""
+    r = client.get("/api/non-esiste")
+    assert r.status_code == 404
+    assert isinstance(r.get_json(), dict)
+
+
+def test_metodo_non_consentito_405_non_500(client):
+    """Bug sweep B1: un metodo sbagliato su una rotta esistente = 405, non 500."""
+    r = client.get("/api/compila")
+    assert r.status_code == 405
+
+
+def test_json_malformato_400_non_500(client):
+    """Bug sweep B1: body non-JSON su una rotta POST = 400, non 500."""
+    r = client.post("/api/aggiungi", data="non-json", content_type="text/plain")
+    assert r.status_code == 400
+
+
+def test_payload_non_dict_400(client):
+    """Bug sweep B2: un body JSON che non è un oggetto (lista/stringa) = 400."""
+    for rotta in ("aggiungi", "rimuovi", "destinazione", "modella", "export"):
+        r = client.post(f"/api/{rotta}", json=["x"])
+        assert r.status_code == 400, rotta
+
+
+def test_config_senza_riga_etichetta_per_voce(app2, client2):
+    """Bug sweep B3: config con `riga_etichetta` mancante -> esito per-voce,
+    NON un 500 (config editata a mano)."""
+    import json as jsonlib
+
+    (app2.CONFIG_PATH.parent).mkdir(parents=True, exist_ok=True)
+    (app2.CONFIG_PATH).write_text(jsonlib.dumps({
+        "destinazione": "scheda.xlsx",
+        "argomenti": [{"sorgente": "a.xlsx", "etichetta": "ALFA"}],
+    }), encoding="utf-8")
+
+    r = client2.post("/api/compila")
+    assert r.status_code == 400
+    d = r.get_json()
+    assert d["esiti"][0]["errore"] == "riga_etichetta non valida"
+
+
+def test_export_con_sorgente_errata_400(client):
+    """Bug sweep B4: export con un argomento non estraibile = 400 (tutto-o-niente),
+    non un foglio con soli header."""
+    client.post("/api/aggiungi", json={
+        "sorgente": "imp.xlsx", "etichetta": "VELOCITA'", "riga_etichetta": 1,
+    })
+    # sorgente poi sparita
+    import app as appmod
+
+    (appmod.SOURCE_DIR / "imp.xlsx").unlink()
+
+    r = client.post("/api/export", json={"nome": "out.xlsx"})
+    assert r.status_code == 400
+    assert r.get_json()["errore"] == "Nessun argomento estraibile"
+
+
+def test_download_url_encoded_non_raggiunge_altri_file(client):
+    """Bug sweep B6: /api/download con percorsi url-encoded non deve permettere
+    di leggere file fuori da export/."""
+    # nessun file esportato: qualunque tentativo deve essere 404
+    for tentativo in ("..%2Fsegreto.xlsx", "..%2F..%2Fsegreto.xlsx"):
+        r = client.get("/api/download/" + tentativo)
+        assert r.status_code == 404, tentativo
+
+
+def test_modella_su_cella_unita_400(app2, client2):
+    """Bug sweep A3 (API): modella verso una cella dentro un merge = 400."""
+    import openpyxl
+
+    p = app2.DEST_DIR / "scheda.xlsx"
+    wb = openpyxl.load_workbook(p)
+    wb.active.merge_cells("C20:C21")
+    wb.save(p)
+    wb.close()
+
+    r = client2.post("/api/modella", json={
+        "destinazione": "scheda.xlsx", "testo": "X", "riga": 20, "colonna": "C",
+    })
+    assert r.status_code == 400
+    assert "unito" in r.get_json()["errore"]
+
+
+def test_modella_pulisce_spazi_testo(app2, client2):
+    """Bug sweep B9: il testo di una voce viene ripulito dagli spazi di bordo."""
+    r = client2.post("/api/modella", json={
+        "destinazione": "scheda.xlsx", "testo": "  NOTA  ", "riga": 40, "colonna": "B",
+    })
+    assert r.status_code == 200
+    import openpyxl
+
+    wb = openpyxl.load_workbook(app2.DEST_DIR / "scheda.xlsx")
+    assert wb.active["B40"].value == "NOTA"
     wb.close()

@@ -60,8 +60,193 @@ def test_colonna_a_numero():
     assert colonna_a_numero("B") == 2
     assert colonna_a_numero("AA") == 27
     assert colonna_a_numero(2) == 2
+    assert colonna_a_numero(" b ") == 2
     with pytest.raises(ValueError):
         colonna_a_numero("1")
+    with pytest.raises(ValueError):
+        colonna_a_numero("")
+    with pytest.raises(ValueError):
+        colonna_a_numero("  ")
+
+
+def test_trova_cella_etichetta_case_sensitive_e_duplicati(tmp_path):
+    """La ricerca è case-sensitive e in caso di etichette duplicate restituisce
+    la PRIMA nel foglio."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "dupl.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B3"] = "CO2"
+    ws["B3"].font = Font(bold=True)
+    ws["E7"] = "co2"
+    ws["E7"].font = Font(bold=True)
+    ws["E9"] = "CO2"
+    ws["E9"].font = Font(bold=True)
+    wb.save(p)
+    wb.close()
+
+    assert trova_cella_etichetta(p, "CO2") == (3, 2)   # prima occorrenza
+    assert trova_cella_etichetta(p, "co2") == (7, 5)   # case-sensitive
+    assert trova_cella_etichetta(p, "Co2") is None
+
+
+def test_crea_voce_rifiuta_cella_unita(tmp_path):
+    """A3: `crea_voce` rifiuta con ValueError una cella dentro un merge
+    (sia anchor che MergedCell) invece di scrivere a metà dell'unione."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "unita.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B3"] = "V"
+    ws["B3"].font = Font(bold=True)
+    ws.merge_cells("A2:A4")
+    wb.save(p)
+    wb.close()
+
+    with pytest.raises(ValueError):
+        crea_voce(p, "X", 2, 1)  # anchor inside merge
+    with pytest.raises(ValueError):
+        crea_voce(p, "X", 4, 1)  # MergedCell non-attiva
+
+
+def test_crea_voce_pulisce_testo(scheda):
+    crea_voce(scheda, "  FOTOMETRIA  ", 28, 2)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(scheda)
+    assert wb.active["B28"].value == "FOTOMETRIA"
+    wb.close()
+
+
+def test_scrivi_sotto_accanto_a_zona_unita(tmp_path):
+    """A4: una cella unita in una colonna LATERALE non blocca la scrittura
+    nella colonna dell'etichetta."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "laterali.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B3"] = "VELOCITA'"
+    ws["B3"].font = Font(bold=True)
+    ws.merge_cells("C4:C6")
+    ws.merge_cells("C9:C10")
+    wb.save(p)
+    wb.close()
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(p)
+    ws = wb.active
+    assert _spazio_libero(ws, 3, 2) >= 3  # la B è libera anche con merge a fianco
+    wb.close()
+
+    scritti = scrivi_sotto(p, 3, 2, [1, 2, 3])
+    assert scritti == 3
+
+    wb = load_workbook(p)
+    ws = wb.active
+    assert [ws["B4"].value, ws["B5"].value, ws["B6"].value] == [1, 2, 3]
+    wb.close()
+
+
+def test_multi_foglio_legge_solo_il_primo(tmp_path):
+    """A5: i file con più fogli vengono letti SOLO sul primo foglio (active);
+    il secondo foglio è ignorato."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "multi.xlsx"
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "FOGLIO1"
+    ws1["A1"] = "VELOCITA'"
+    ws1["A1"].font = Font(bold=True)
+    ws1["A2"] = 100
+    ws2 = wb.create_sheet("FOGLIO2")
+    ws2["A1"] = "PRESSIONE"
+    ws2["A1"].font = Font(bold=True)
+    ws2["A2"] = 9
+    wb.save(p)
+    wb.close()
+
+    args = trova_argomenti(p)
+    assert [(a.etichetta, a.riga) for a in args] == [("VELOCITA'", 1)]
+    assert estrai_colonna(p, 1) == [100]
+    assert trova_cella_etichetta(p, "PRESSIONE") is None
+    assert trova_cella_etichetta(p, "VELOCITA'") == (1, 1)
+
+
+def test_estrai_colonna_oltre_max_row(tmp_path):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "alto.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "V"
+    ws["A1"].font = Font(bold=True)
+    ws["A2"] = 7
+    wb.save(p)
+    wb.close()
+
+    assert estrai_colonna(p, 999) == []
+
+
+def test_estrai_colonna_booleano_e_decimali(tmp_path):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "tipi.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "V"
+    ws["A1"].font = Font(bold=True)
+    ws["A2"] = True
+    ws["A3"] = 1.5
+    ws["A4"] = 2
+    wb.save(p)
+    wb.close()
+
+    assert estrai_colonna(p, 1) == [True, 1.5, 2]
+
+
+def test_spazio_libero_soglia_zero(scheda_stessa_colonna):
+    from openpyxl import load_workbook
+
+    wb = load_workbook(scheda_stessa_colonna)
+    ws = wb.active
+    assert _spazio_libero(ws, 3, 2, soglia=0) == 0
+    wb.close()
+
+
+def test_spazio_libero_fermo_a_due_vuote(tmp_path):
+    """Se sotto l'etichetta ci sono due righe vuote consecutive, la conta."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = tmp_path / "duevuote.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["B3"] = "V"
+    ws["B3"].font = Font(bold=True)
+    ws["B4"], ws["B5"] = 1, 2
+    ws["B8"] = "ALTRO"
+    ws["B8"].font = Font(bold=True)
+    wb.save(p)
+    wb.close()
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(p)
+    ws = wb.active
+    # spazio illimitato in realtà fino al bold riga 8; con soglia basta
+    assert _spazio_libero(ws, 3, 2, soglia=3) == 3
+    wb.close()
 
 
 def test_scrivi_sotto_svuota_e_riscrive(tmp_path, scheda):

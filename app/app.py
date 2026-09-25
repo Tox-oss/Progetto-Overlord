@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_file
+from werkzeug.exceptions import HTTPException
 
 from parser import (
     _spazio_libero,
@@ -57,10 +58,25 @@ def _risolvi_in(cartella: Path, nome) -> Path | None:
     return path
 
 
+@app.errorhandler(HTTPException)
+def _errore_http(exc):
+    """Gli errori HTTP (404/405/400…) restituiscono JSON col loro codice.
+
+    Senza questo handler Flasck farebbe gestire l'eccezione da
+    `_errore_generico(Exception)`, convertendo ogni 404/405/JSON malformato
+    in un 500 generico."""
+    return jsonify({"errore": exc.description or exc.name}), exc.code or 500
+
+
 @app.errorhandler(Exception)
 def _errore_generico(exc):  # noqa: BLE001
     traceback.print_exc()
     return jsonify({"errore": "Errore interno del server"}), 500
+
+
+def _payload_dict(payload) -> bool:
+    """True se il body JSON è un dizionario (mai una lista/stringa/None)."""
+    return isinstance(payload, dict)
 
 
 def _xlsx_files(cartella: Path) -> list[str]:
@@ -152,7 +168,7 @@ def _estraai_tutti(cfg: dict) -> list[dict]:
         a_ = dict(a)
         try:
             a_["valori"] = estrai_colonna(path, int(a_["riga_etichetta"]))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, KeyError):
             a_["valori"] = []
             a_["errore"] = "riga_etichetta non valida"
         estratti.append(a_)
@@ -283,8 +299,14 @@ def _colonna_lettera(n: int) -> str:
 
 
 def _nome_foglio_valido(etichetta: str) -> str:
-    """Nome foglio Excel ammissibile (niente caratteri vietati, max 31 char)."""
+    """Nome foglio Excel ammissibile (niente caratteri vietati, max 31 char).
+
+    Oltre ai caratteri banditi da Excel viene tolto l'apostrofo ai bordi:
+    un nome foglio non può iniziare né finire con `'` (etichette italiane
+    come `VELOCITA'` finirebbero comunque per essere "riparate" da Excel).
+    """
     nome = re.sub(r"[\\/*?:\[\]]", "_", str(etichetta)).strip() or "ARGOMENTO"
+    nome = nome.strip("'") or "ARGOMENTO"
     return nome[:31]
 
 
@@ -306,6 +328,8 @@ def api_config():
 @app.post("/api/aggiungi")
 def api_aggiungi():
     payload = request.get_json(force=True)
+    if not _payload_dict(payload):
+        return jsonify({"errore": "Body JSON non valido"}), 400
     sorgente, etichetta = payload.get("sorgente"), payload.get("etichetta")
     riga = payload.get("riga_etichetta")
     if not all((sorgente, etichetta, riga)):
@@ -335,6 +359,8 @@ def api_aggiungi():
 @app.post("/api/rimuovi")
 def api_rimuovi():
     payload = request.get_json(force=True)
+    if not _payload_dict(payload):
+        return jsonify({"errore": "Body JSON non valido"}), 400
     sorgente, etichetta = payload.get("sorgente"), payload.get("etichetta")
     cfg = _leggi_config()
     cfg["argomenti"] = [
@@ -349,6 +375,8 @@ def api_rimuovi():
 @app.post("/api/destinazione")
 def api_destinazione():
     payload = request.get_json(force=True)
+    if not _payload_dict(payload):
+        return jsonify({"errore": "Body JSON non valido"}), 400
     destinazione = payload.get("destinazione")
     if destinazione is not None and not _nome_valido(destinazione):
         return jsonify({"errore": "Nome scheda non valido"}), 400
@@ -361,6 +389,8 @@ def api_destinazione():
 @app.post("/api/modella")
 def api_modella():
     payload = request.get_json(force=True)
+    if not _payload_dict(payload):
+        return jsonify({"errore": "Body JSON non valido"}), 400
     scheda, testo, riga = (
         payload.get("destinazione"),
         payload.get("testo"),
@@ -407,11 +437,17 @@ def api_compila():
 def api_export():
     """Salva con nome: esporta tutti gli argomenti configurati in un xlsx."""
     payload = request.get_json(force=True)
+    if not _payload_dict(payload):
+        return jsonify({"errore": "Body JSON non valido"}), 400
     nome = _nome_export_sicuro(payload.get("nome", ""))
     cfg = _leggi_config()
     estratti = _estraai_tutti(cfg)
     if not estratti:
         return jsonify({"errore": "Nessun argomento configurato"}), 400
+    if any(e.get("errore") for e in estratti):
+        return jsonify(
+            {"errore": "Nessun argomento estraibile", "esiti": estratti}
+        ), 400
 
     from openpyxl import Workbook
 
@@ -475,7 +511,7 @@ def api_elabora():
         return jsonify({"ok": True, "esiti": esiti["esiti"]})
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
-        return jsonify({"errore": str(exc)}), 500
+        return jsonify({"errore": "Errore interno del server"}), 500
 
 
 if __name__ == "__main__":

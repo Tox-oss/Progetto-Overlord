@@ -69,6 +69,15 @@ Resetta anche `files/config/selezione.json` (`destinazione`/`argomenti`) e `file
 | POST | `/api/export` | esporta con nome |
 | POST | `/api/elabora` | bridge n8n (estrai + dedup + compila) |
 
+## Limiti noti
+
+- **Un solo foglio per file**: sorgenti e scheda vengono letti/scritti solo sul **primo foglio attivo** del file Excel; i fogli successivi sono ignorati (vincolo voluto, non un bug).
+- **Scrittura non transazionale**: `compila` fa una pre-validazione "tutto-o-niente" (se anche un solo argomento manca o ha errori, nulla viene scritto e la risposta elenca i problemi); dopo la validazione le celle vengono scritte una a una, quindi un'interruzione a metà ciclo può lasciare scritture parziali.
+- **Dedup per intero**: `elabora` salva l'esito per file; se un file cambia solo in parte, gli argomenti invariati non vengono ricompilati.
+- **Celle unite**: una cella dentro un intervallo unito non può essere scritta (errore "cella unita") né può ospitare l'etichetta di un argomento.
+- **Nomi foglio**: limitati a 31 caratteri (limite Excel); gli apostrofi ai bordi vengono rimossi.
+- **`selezione.json`**: se `riga_etichetta` manca o non è un numero (config modificata a mano), l'argomento viene segnalato con errore per-voce e la compilazione si ferma.
+
 ## Prossimi passi
 
 - Validare la parser su file reali dell'utente (euristiche titolo/grassetto).

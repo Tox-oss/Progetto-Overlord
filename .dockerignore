@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+contexto/
+tests/
+tools/
+files/
+n8n/
+Dockerfile.selettore
+README.md
+*.log
